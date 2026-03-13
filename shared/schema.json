@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Theoria Proof Trace",
+  "description": "Interchange format between Julia (computation) and Lean 4 (verification)",
+  "type": "object",
+  "required": ["registry", "expr", "steps", "result"],
+  "properties": {
+    "registry": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "tensor", "slot1", "slot2"],
+        "properties": {
+          "type": { "enum": ["antisym", "sym"] },
+          "tensor": { "type": "string" },
+          "slot1": { "type": "integer", "minimum": 0 },
+          "slot2": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "expr": { "$ref": "#/definitions/texpr" },
+    "steps": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/proofstep" }
+    },
+    "result": { "$ref": "#/definitions/texpr" }
+  },
+  "definitions": {
+    "index": {
+      "type": "object",
+      "required": ["name", "position"],
+      "properties": {
+        "name": { "type": "string" },
+        "position": { "enum": ["up", "down"] }
+      }
+    },
+    "texpr": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "zero" } }
+        },
+        {
+          "type": "object",
+          "required": ["type", "num", "den"],
+          "properties": {
+            "type": { "const": "scalar" },
+            "num": { "type": "integer" },
+            "den": { "type": "integer" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "name", "indices"],
+          "properties": {
+            "type": { "const": "tensor" },
+            "name": { "type": "string" },
+            "indices": { "type": "array", "items": { "$ref": "#/definitions/index" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "num", "den", "expr"],
+          "properties": {
+            "type": { "const": "smul" },
+            "num": { "type": "integer" },
+            "den": { "type": "integer" },
+            "expr": { "$ref": "#/definitions/texpr" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "left", "right"],
+          "properties": {
+            "type": { "const": "sum" },
+            "left": { "$ref": "#/definitions/texpr" },
+            "right": { "$ref": "#/definitions/texpr" }
+          }
+        }
+      ]
+    },
+    "proofstep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["rule", "tensor", "slot1", "slot2", "path"],
+          "properties": {
+            "rule": { "const": "swap_slots" },
+            "tensor": { "type": "string" },
+            "slot1": { "type": "integer" },
+            "slot2": { "type": "integer" },
+            "path": { "type": "array", "items": { "type": "integer" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["rule", "path"],
+          "properties": {
+            "rule": { "const": "collect" },
+            "path": { "type": "array", "items": { "type": "integer" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["rule", "path"],
+          "properties": {
+            "rule": { "const": "zero_elim" },
+            "path": { "type": "array", "items": { "type": "integer" } }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["rule", "path"],
+          "properties": {
+            "rule": { "const": "sum_zero" },
+            "path": { "type": "array", "items": { "type": "integer" } }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# Lean build artifacts
+lean/.lake/
+lean/lake-packages/
+
+# Julia
+julia/stderr.log
+
+# Traces (regenerated)
+trace.json
+trace2.json
+
+# Extracted proto files
+theoria-proto/extracted/
+
+# Editor
+.vscode/
+*.swp
