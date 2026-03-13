@@ -3,7 +3,14 @@
 
   This must match shared/ir.md and julia/MicroTensor.jl exactly.
   The types are deliberately simple (no dependent indices) for the MVP.
+
+  The semantic evaluation function `TExpr.eval` maps expressions into a
+  ℚ-module, allowing us to replace axioms with Mathlib-backed theorems.
 -/
+
+import Mathlib.Algebra.Order.Field.Rat
+import Mathlib.Algebra.Module.Basic
+import Mathlib.Tactic.FieldSimp
 
 /-- Index position: upper (contravariant) or lower (covariant). -/
 inductive Position where
@@ -50,3 +57,27 @@ def List.swap {α : Type} (l : List α) (i j : Nat) : List α :=
       else if k == j then vi
       else v
   | _, _ => l
+
+-- ─────────────────────────────────────────────────────────────
+-- Semantic evaluation: map TExpr into a ℚ-module
+-- ─────────────────────────────────────────────────────────────
+
+/-- Rational coefficient from integer numerator/denominator pair. -/
+def ratCoeff (n d : Int) : ℚ := (n : ℚ) / (d : ℚ)
+
+/-- An environment maps tensor configurations to values in M,
+    subject to an antisymmetry constraint on slot swaps. -/
+structure TEnv (M : Type*) [AddCommGroup M] where
+  lookup : String → List Index → M
+  swap_neg : ∀ (name : String) (idxs : List Index) (s1 s2 : Nat),
+    s1 < idxs.length → s2 < idxs.length →
+    lookup name (idxs.swap s1 s2) = -(lookup name idxs)
+
+/-- Interpret a tensor expression in a ℚ-module via an environment. -/
+noncomputable def TExpr.eval {M : Type*} [AddCommGroup M] [Module ℚ M]
+    (env : TEnv M) : TExpr → M
+  | .zero => 0
+  | .scalar _ _ => 0
+  | .tensor name idxs => env.lookup name idxs
+  | .smul n d e => ratCoeff n d • e.eval env
+  | .sum a b => a.eval env + b.eval env

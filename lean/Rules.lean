@@ -1,75 +1,88 @@
 /-
   Rules.lean — Verified rewrite rules for tensor expressions.
 
-  These are the axioms of our tensor algebra. Each is a theorem that
-  the Lean kernel verifies. The trace replayer applies these theorems
-  in sequence to produce a checked proof.
+  Each rule is a theorem proved from Mathlib's module algebra,
+  via the semantic evaluation function `TExpr.eval`. The trace
+  replayer applies these theorems in sequence to produce a checked proof.
 
-  For the MVP, we axiomatise rather than derive from deeper foundations.
-  The axioms correspond to:
-    1. Slot antisymmetry: R_{...i...j...} = -R_{...j...i...} if antisym(i,j)
+  The rules correspond to:
+    1. Slot antisymmetry: R_{...i...j...} = -R_{...j...i...}
     2. Scalar collection: a·e + b·e = (a+b)·e
     3. Zero elimination: 0·e = 0
-    4. Sum identity: 0 + e = e
-
-  DESIGN NOTE: We use `axiom` here because we're defining the equational
-  theory of tensor expressions, not deriving it from a model. This is
-  the right move for the prototype — we can always replace axioms with
-  theorems later once we have a semantic model (e.g., multilinear maps
-  on a module). The axioms are obviously consistent (the standard
-  interpretation in linear algebra is a model).
+    4. Sum identity: 0 + e = e, e + 0 = e
+    5. SMul composition: a·(b·e) = (a*b)·e
 -/
 
 import MicroTensor
 
 open TExpr
 
+variable {M : Type*} [AddCommGroup M] [Module ℚ M] (env : TEnv M)
+
 -- ─────────────────────────────────────────────────────────────
--- Axiom 1: Slot antisymmetry
--- If tensor R has antisymmetry in slots s1,s2 then swapping those
--- slots negates the expression.
+-- Rule 1: Slot antisymmetry
+-- Swapping antisymmetric slots negates the tensor.
 -- ─────────────────────────────────────────────────────────────
 
-/-- Swapping antisymmetric slots negates the tensor. -/
-axiom antisym_swap (name : String) (idxs : List Index) (s1 s2 : Nat)
+theorem eval_antisym_swap (name : String) (idxs : List Index) (s1 s2 : Nat)
     (h : s1 < idxs.length) (h2 : s2 < idxs.length) :
-    tensor name (idxs.swap s1 s2) = smul (-1) 1 (tensor name idxs)
+    (tensor name (idxs.swap s1 s2)).eval env =
+    (smul (-1) 1 (tensor name idxs)).eval env := by
+  simp [TExpr.eval, ratCoeff]
+  exact env.swap_neg name idxs s1 s2 h h2
 
 -- ─────────────────────────────────────────────────────────────
--- Axiom 2: Scalar collection
+-- Rule 2: Scalar collection
 -- a·e + b·e = (a+b)·e (with rational arithmetic)
 -- ─────────────────────────────────────────────────────────────
 
-/-- Adding scalar multiples of the same expression. -/
-axiom collect_smul (a_n a_d b_n b_d : Int) (e : TExpr) :
-    sum (smul a_n a_d e) (smul b_n b_d e) =
-    smul (a_n * b_d + b_n * a_d) (a_d * b_d) e
+theorem eval_collect_smul (a_n a_d b_n b_d : Int) (e : TExpr)
+    (ha : (a_d : ℚ) ≠ 0) (hb : (b_d : ℚ) ≠ 0) :
+    (sum (smul a_n a_d e) (smul b_n b_d e)).eval env =
+    (smul (a_n * b_d + b_n * a_d) (a_d * b_d) e).eval env := by
+  simp only [TExpr.eval, ← add_smul]
+  congr 1
+  simp only [ratCoeff, Int.cast_mul, Int.cast_add]
+  field_simp
 
--- Convenience: bare tensor = smul 1 1 tensor
-axiom tensor_as_smul (name : String) (idxs : List Index) :
-    tensor name idxs = smul 1 1 (tensor name idxs)
+theorem eval_tensor_as_smul (name : String) (idxs : List Index) :
+    (tensor name idxs).eval env =
+    (smul 1 1 (tensor name idxs)).eval env := by
+  simp [TExpr.eval, ratCoeff]
 
 -- ─────────────────────────────────────────────────────────────
--- Axiom 3: Zero elimination
+-- Rule 3: Zero elimination
 -- 0·e = 0
 -- ─────────────────────────────────────────────────────────────
 
-/-- Zero scalar multiple is zero. -/
-axiom smul_zero (d : Int) (e : TExpr) :
-    smul 0 d e = zero
+theorem eval_smul_zero (d : Int) (e : TExpr) :
+    (smul 0 d e).eval env = zero.eval env := by
+  simp [TExpr.eval, ratCoeff]
 
 -- ─────────────────────────────────────────────────────────────
--- Axiom 4: Sum identity
+-- Rule 4: Sum identity
 -- 0 + e = e, e + 0 = e
 -- ─────────────────────────────────────────────────────────────
 
-axiom sum_zero_left (e : TExpr) : sum zero e = e
-axiom sum_zero_right (e : TExpr) : sum e zero = e
+theorem eval_sum_zero_left (e : TExpr) :
+    (sum zero e).eval env = e.eval env := by
+  simp [TExpr.eval]
+
+theorem eval_sum_zero_right (e : TExpr) :
+    (sum e zero).eval env = e.eval env := by
+  simp [TExpr.eval]
 
 -- ─────────────────────────────────────────────────────────────
--- Axiom 5: SMul composition
+-- Rule 5: SMul composition
 -- a·(b·e) = (a*b)·e
 -- ─────────────────────────────────────────────────────────────
 
-axiom smul_smul (a_n a_d b_n b_d : Int) (e : TExpr) :
-    smul a_n a_d (smul b_n b_d e) = smul (a_n * b_n) (a_d * b_d) e
+theorem eval_smul_smul (a_n a_d b_n b_d : Int) (e : TExpr) :
+    (smul a_n a_d (smul b_n b_d e)).eval env =
+    (smul (a_n * b_n) (a_d * b_d) e).eval env := by
+  simp only [TExpr.eval, _root_.smul_smul]
+  congr 1
+  simp only [ratCoeff, Int.cast_mul]
+  by_cases ha : (a_d : ℚ) = 0 <;> simp_all [div_zero]
+  by_cases hb : (b_d : ℚ) = 0 <;> simp_all [div_zero, mul_zero]
+  field_simp

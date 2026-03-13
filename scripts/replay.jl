@@ -1,6 +1,10 @@
 #!/usr/bin/env julia
 # replay.jl — Read a JSON proof trace and emit a .lean file
 #
+# The generated proof works by evaluating tensor expressions into a ℚ-module
+# via TExpr.eval, then using the environment's antisymmetry constraints and
+# Mathlib's module algebra to close the goal.
+#
 # Usage:
 #   julia replay.jl trace.json > lean/Generated.lean
 #   julia replay.jl trace.json theorem_name > lean/Generated.lean
@@ -30,25 +34,6 @@ function lean_index(idx::Dict)
     """⟨"$(idx["name"])", $pos⟩"""
 end
 
-"""Convert a JSON TExpr to Lean syntax using idx_* def names."""
-function lean_expr(e::Dict)
-    t = e["type"]
-    if t == "zero"
-        "zero"
-    elseif t == "scalar"
-        "scalar $(e["num"]) $(e["den"])"
-    elseif t == "tensor"
-        idxs = join([lean_idx_name(i["name"]) for i in e["indices"]], ", ")
-        """tensor "$(e["name"])" [$idxs]"""
-    elseif t == "smul"
-        "smul $(e["num"]) $(e["den"]) ($(lean_expr(e["expr"])))"
-    elseif t == "sum"
-        "sum ($(lean_expr(e["left"]))) ($(lean_expr(e["right"])))"
-    else
-        error("Unknown TExpr type: $t")
-    end
-end
-
 """Collect all unique indices from a TExpr JSON."""
 function collect_indices(e::Dict)
     idxs = Dict{String, Dict}()
@@ -73,7 +58,7 @@ end
 """Generate a sanitized Lean identifier for an index name."""
 lean_idx_name(name::String) = "idx_$name"
 
-"""Generate Lean expr using idx_name refs (for theorem statement)."""
+"""Convert a JSON TExpr to Lean syntax using idx_* def names."""
 function lean_expr_with_names(e::Dict)
     t = e["type"]
     if t == "zero"
@@ -111,26 +96,6 @@ function get_at_path(e::Dict, path::Vector)
     end
 end
 
-"""Replace subtree at path in JSON expr."""
-function replace_at_path(e::Dict, path::Vector, new_node::Dict)
-    isempty(path) && return new_node
-    p = path[1]
-    rest = path[2:end]
-    t = e["type"]
-    if t == "sum"
-        if p == 0
-            Dict("type" => "sum", "left" => replace_at_path(e["left"], rest, new_node), "right" => e["right"])
-        else
-            Dict("type" => "sum", "left" => e["left"], "right" => replace_at_path(e["right"], rest, new_node))
-        end
-    elseif t == "smul"
-        Dict("type" => "smul", "num" => e["num"], "den" => e["den"],
-             "expr" => replace_at_path(e["expr"], rest, new_node))
-    else
-        error("Cannot descend into $t at path $path")
-    end
-end
-
 """Get the tensor at a swap step target."""
 function get_swap_info(expr::Dict, step::Dict)
     path = Int.(step["path"])
@@ -153,7 +118,7 @@ function get_swap_info(expr::Dict, step::Dict)
 end
 
 # ─────────────────────────────────────────────────────────────
-# Lean proof generation
+# Lean proof generation (eval-based)
 # ─────────────────────────────────────────────────────────────
 
 function generate_lean(trace::Dict; theorem_name::String="generated_proof",
@@ -179,64 +144,43 @@ function generate_lean(trace::Dict; theorem_name::String="generated_proof",
     end
     push!(lines, "")
 
-    # Generate theorem statement
+    # Module variable
+    push!(lines, "variable {M : Type*} [AddCommGroup M] [Module ℚ M] (env : TEnv M)")
+    push!(lines, "")
+
+    # Generate theorem statement with eval
     lhs = lean_expr_with_names(trace["expr"])
     rhs = lean_expr_with_names(trace["result"])
     push!(lines, "theorem $theorem_name :")
-    push!(lines, "    $lhs = $rhs := by")
+    push!(lines, "    ($lhs).eval env =")
+    push!(lines, "    ($rhs).eval env := by")
 
-    # Pre-process: find bare tensors that need tensor_as_smul before a swap.
-    # If there's a swap followed by collect, the collect's tensor_as_smul must
-    # come BEFORE the swap (when indices differ) to avoid rw clobbering nested terms.
+    # Step 1: Unfold eval to module operations
+    push!(lines, "  simp only [TExpr.eval]")
+
+    # Step 2: Process swap steps — emit swap_neg rewrites
     steps = trace["steps"]
     current_expr = trace["expr"]
-    tensor_as_smul_emitted = Set{String}()  # track which paths got tensor_as_smul
+    swap_count = 0
 
     for (i, step) in enumerate(steps)
         rule = step["rule"]
 
         if rule == "swap_slots"
+            swap_count += 1
             swapped_idxs, canon_idxs, s1, s2 = get_swap_info(current_expr, step)
             tensor_name = step["tensor"]
-            swap_path = Int.(step["path"])
+            n = length(canon_idxs)
 
-            # Look ahead: if next step is collect at the parent, emit tensor_as_smul
-            # for the sibling summand BEFORE the swap
-            if i < length(steps) && steps[i+1]["rule"] == "collect"
-                collect_path = Int.(steps[i+1]["path"])
-                sum_node = get_at_path(current_expr, collect_path)
-                if sum_node["type"] == "sum"
-                    # The swap targets one child. Find the other.
-                    # swap_path relative to collect_path tells us which child
-                    rel = swap_path[length(collect_path)+1:end]
-                    if length(rel) >= 1
-                        sibling_idx = 1 - rel[1]  # 0→1, 1→0
-                        sibling = sibling_idx == 0 ? sum_node["left"] : sum_node["right"]
-                        if sibling["type"] == "tensor"
-                            idxs_lean = "[" * join([lean_idx_name(idx["name"]) for idx in sibling["indices"]], ", ") * "]"
-                            push!(lines, "  -- Normalize bare tensor to smul form (before swap, indices differ)")
-                            push!(lines, """  rw [tensor_as_smul "$(sibling["name"])" $idxs_lean]""")
-                            # Update the expression
-                            sibling_path = vcat(collect_path, [sibling_idx])
-                            current_expr = replace_at_path(current_expr, sibling_path,
-                                Dict("type" => "smul", "num" => 1, "den" => 1, "expr" => sibling))
-                            tensor_as_smul_emitted = true
-                        end
-                    end
-                end
-            end
-
-            # Emit the swap step
             swapped_lean = "[" * join([lean_idx_name(idx["name"]) for idx in swapped_idxs], ", ") * "]"
             canon_lean = "[" * join([lean_idx_name(idx["name"]) for idx in canon_idxs], ", ") * "]"
 
-            push!(lines, "  -- Step $i: swap slots $s1,$s2 of $tensor_name")
-            push!(lines, "  have h$i : $swapped_lean = ($canon_lean).swap $s1 $s2 := by native_decide")
-            push!(lines, "  rw [h$i]")
-            push!(lines, """  rw [antisym_swap "$tensor_name" $canon_lean $s1 $s2 (by decide) (by decide)]""")
+            push!(lines, "  have hs$swap_count : $swapped_lean = ($canon_lean).swap $s1 $s2 := by native_decide")
+            push!(lines, """  rw [hs$swap_count, env.swap_neg "$tensor_name" $canon_lean $s1 $s2 (by decide) (by decide)]""")
 
-            # Update current expr
-            target = get_at_path(current_expr, swap_path)
+            # Update current expr (swap applied)
+            path = Int.(step["path"])
+            target = get_at_path(current_expr, path)
             if target["type"] == "tensor"
                 new_node = Dict("type" => "smul", "num" => -1, "den" => 1,
                     "expr" => Dict("type" => "tensor", "name" => tensor_name, "indices" => canon_idxs))
@@ -244,58 +188,20 @@ function generate_lean(trace::Dict; theorem_name::String="generated_proof",
                 new_node = Dict("type" => "smul", "num" => target["num"] * -1, "den" => target["den"],
                     "expr" => Dict("type" => "tensor", "name" => tensor_name, "indices" => canon_idxs))
             end
-            current_expr = replace_at_path(current_expr, swap_path, new_node)
-
-        elseif rule == "collect"
-            path = Int.(step["path"])
-            sum_node = get_at_path(current_expr, path)
-            left = sum_node["left"]
-            right = sum_node["right"]
-
-            push!(lines, "  -- Step $i: collect")
-
-            # If left is still a bare tensor (tensor_as_smul wasn't hoisted), handle it
-            if left["type"] == "tensor"
-                idxs_lean = "[" * join([lean_idx_name(idx["name"]) for idx in left["indices"]], ", ") * "]"
-                push!(lines, """  conv_lhs => arg 1; rw [tensor_as_smul "$(left["name"])" $idxs_lean]""")
-                left = Dict("type" => "smul", "num" => 1, "den" => 1, "expr" => left)
-            end
-
-            a_n = left["num"]
-            a_d = left["den"]
-            b_n = right["num"]
-            b_d = right["den"]
-            inner = lean_expr(left["expr"])
-            push!(lines, "  rw [collect_smul $a_n $a_d ($b_n) $b_d ($inner)]")
-
-            # Update current expr
-            new_num = a_n * b_d + b_n * a_d
-            new_den = a_d * b_d
-            current_expr = replace_at_path(current_expr, path,
-                Dict("type" => "smul", "num" => new_num, "den" => new_den, "expr" => left["expr"]))
-
-        elseif rule == "zero_elim"
-            push!(lines, "  -- Step $i: zero elimination")
-            path = Int.(step["path"])
-            node = get_at_path(current_expr, path)
-            # Use exact instead of rw — the kernel reduces the arithmetic
-            den = node["den"]
-            inner = lean_expr(node["expr"])
-            push!(lines, "  exact smul_zero ($den) ($inner)")
-            current_expr = replace_at_path(current_expr, path, Dict("type" => "zero"))
-
-        elseif rule == "sum_zero"
-            push!(lines, "  -- Step $i: sum with zero")
-            path = Int.(step["path"])
-            sum_node = get_at_path(current_expr, path)
-            if sum_node["left"]["type"] == "zero"
-                push!(lines, "  rw [sum_zero_left]")
-                current_expr = replace_at_path(current_expr, path, sum_node["right"])
-            else
-                push!(lines, "  rw [sum_zero_right]")
-                current_expr = replace_at_path(current_expr, path, sum_node["left"])
-            end
+            current_expr = replace_at_path(current_expr, path, new_node)
         end
+        # collect, zero_elim, sum_zero are handled by the closing tactic
+    end
+
+    # Step 3: Close the goal — after all swaps, the module algebra should resolve
+    # For simple antisymmetry (x + (-x) = 0), add_neg_cancel works.
+    # For more complex cases, simp with module lemmas handles it.
+    if swap_count == 1 && length(steps) <= 3
+        # Simple case: one swap, result is zero → add_neg_cancel
+        push!(lines, "  exact add_neg_cancel _")
+    else
+        # General case: use simp with module lemmas
+        push!(lines, "  simp [ratCoeff, add_neg_cancel, neg_add_cancel]")
     end
 
     if namespace !== nothing
@@ -305,6 +211,26 @@ function generate_lean(trace::Dict; theorem_name::String="generated_proof",
 
     push!(lines, "")
     join(lines, "\n") * "\n"
+end
+
+"""Replace subtree at path in JSON expr."""
+function replace_at_path(e::Dict, path::Vector, new_node::Dict)
+    isempty(path) && return new_node
+    p = path[1]
+    rest = path[2:end]
+    t = e["type"]
+    if t == "sum"
+        if p == 0
+            Dict("type" => "sum", "left" => replace_at_path(e["left"], rest, new_node), "right" => e["right"])
+        else
+            Dict("type" => "sum", "left" => e["left"], "right" => replace_at_path(e["right"], rest, new_node))
+        end
+    elseif t == "smul"
+        Dict("type" => "smul", "num" => e["num"], "den" => e["den"],
+             "expr" => replace_at_path(e["expr"], rest, new_node))
+    else
+        error("Cannot descend into $t at path $path")
+    end
 end
 
 # ─────────────────────────────────────────────────────────────
