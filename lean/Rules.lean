@@ -25,11 +25,25 @@ variable {M : Type*} [AddCommGroup M] [Module ℚ M] (env : TEnv M)
 -- ─────────────────────────────────────────────────────────────
 
 theorem eval_antisym_swap (name : String) (idxs : List Index) (s1 s2 : Nat)
+    (ha : env.isAntisym name s1 s2)
     (h : s1 < idxs.length) (h2 : s2 < idxs.length) :
     (tensor name (idxs.swap s1 s2)).eval env =
     (smul (-1) 1 (tensor name idxs)).eval env := by
   simp [TExpr.eval, ratCoeff]
-  exact env.swap_neg name idxs s1 s2 h h2
+  exact env.swap_neg name idxs s1 s2 ha h h2
+
+-- ─────────────────────────────────────────────────────────────
+-- Rule 1a: Slot symmetry
+-- Swapping symmetric slots preserves the tensor.
+-- ─────────────────────────────────────────────────────────────
+
+theorem eval_sym_swap (name : String) (idxs : List Index) (s1 s2 : Nat)
+    (hs : env.isSym name s1 s2)
+    (h : s1 < idxs.length) (h2 : s2 < idxs.length) :
+    (tensor name (idxs.swap s1 s2)).eval env =
+    (tensor name idxs).eval env := by
+  simp [TExpr.eval]
+  exact env.swap_id name idxs s1 s2 hs h h2
 
 -- ─────────────────────────────────────────────────────────────
 -- Rule 1b: First Bianchi identity
@@ -37,13 +51,14 @@ theorem eval_antisym_swap (name : String) (idxs : List Index) (s1 s2 : Nat)
 -- ─────────────────────────────────────────────────────────────
 
 theorem eval_bianchi (name : String) (idxs : List Index) (s1 s2 s3 : Nat)
+    (hb : env.isBianchi name s1 s2 s3)
     (h1 : s1 < idxs.length) (h2 : s2 < idxs.length) (h3 : s3 < idxs.length) :
     (sum (tensor name idxs)
          (sum (tensor name (idxs.cyclicPerm3 s1 s2 s3))
               (tensor name ((idxs.cyclicPerm3 s1 s2 s3).cyclicPerm3 s1 s2 s3)))).eval env =
     zero.eval env := by
   simp [TExpr.eval]
-  exact env.bianchi name idxs s1 s2 s3 h1 h2 h3
+  exact env.bianchi name idxs s1 s2 s3 hb h1 h2 h3
 
 -- ─────────────────────────────────────────────────────────────
 -- Rule 2: Scalar collection

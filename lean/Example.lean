@@ -19,13 +19,14 @@ def d : Index := ⟨"d", .down⟩
 variable {M : Type*} [AddCommGroup M] [Module ℚ M] (env : TEnv M)
 
 -- The proof: R_{abcd} + R_{abdc} = 0 under evaluation
-theorem riemann_antisym_34 :
+theorem riemann_antisym_34
+    (ha : env.isAntisym "R" 2 3) :
     (sum (tensor "R" [a, b, c, d]) (tensor "R" [a, b, d, c])).eval env =
     zero.eval env := by
   -- Unfold eval to module operations
   simp only [TExpr.eval]
   -- Show swapped indices match a slot swap
   have h_swap : [a, b, d, c] = ([a, b, c, d].swap 2 3) := by native_decide
-  rw [h_swap, env.swap_neg "R" [a, b, c, d] 2 3 (by decide) (by decide)]
+  rw [h_swap, env.swap_neg "R" [a, b, c, d] 2 3 ha (by decide) (by decide)]
   -- x + (-x) = 0
   exact add_neg_cancel _

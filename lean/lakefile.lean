@@ -32,3 +32,11 @@ lean_lib Generated2 where
 @[default_target]
 lean_lib Generated3 where
   srcDir := "."
+
+@[default_target]
+lean_lib Generated4 where
+  srcDir := "."
+
+@[default_target]
+lean_lib Generated5 where
+  srcDir := "."

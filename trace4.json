@@ -1,0 +1,35 @@
+{
+  "registry": [
+    {
+      "type": "sym",
+      "tensor": "g",
+      "slot1": 0,
+      "slot2": 1
+    }
+  ],
+  "expr": {
+    "type": "tensor",
+    "name": "g",
+    "indices": [
+      {"name": "b", "position": "down"},
+      {"name": "a", "position": "down"}
+    ]
+  },
+  "steps": [
+    {
+      "rule": "swap_slots",
+      "tensor": "g",
+      "slot1": 0,
+      "slot2": 1,
+      "path": []
+    }
+  ],
+  "result": {
+    "type": "tensor",
+    "name": "g",
+    "indices": [
+      {"name": "a", "position": "down"},
+      {"name": "b", "position": "down"}
+    ]
+  }
+}

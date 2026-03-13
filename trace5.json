@@ -1,0 +1,30 @@
+{
+  "registry": [
+    {"type": "antisym", "tensor": "R", "slot1": 0, "slot2": 1},
+    {"type": "antisym", "tensor": "R", "slot1": 2, "slot2": 3}
+  ],
+  "expr": {
+    "type": "tensor",
+    "name": "R",
+    "indices": [
+      {"name": "b", "position": "down"},
+      {"name": "a", "position": "down"},
+      {"name": "d", "position": "down"},
+      {"name": "c", "position": "down"}
+    ]
+  },
+  "steps": [
+    {"rule": "swap_slots", "tensor": "R", "slot1": 0, "slot2": 1, "path": []},
+    {"rule": "swap_slots", "tensor": "R", "slot1": 2, "slot2": 3, "path": []}
+  ],
+  "result": {
+    "type": "tensor",
+    "name": "R",
+    "indices": [
+      {"name": "a", "position": "down"},
+      {"name": "b", "position": "down"},
+      {"name": "c", "position": "down"},
+      {"name": "d", "position": "down"}
+    ]
+  }
+}

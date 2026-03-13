@@ -1,0 +1,84 @@
+{
+  "steps": [
+    {
+      "path": [],
+      "slot1": 0,
+      "rule": "swap_slots",
+      "slot2": 1,
+      "tensor": "R"
+    },
+    {
+      "path": [],
+      "slot1": 2,
+      "rule": "swap_slots",
+      "slot2": 3,
+      "tensor": "R"
+    }
+  ],
+  "registry": [
+    {
+      "slot1": 0,
+      "type": "antisym",
+      "slot2": 1,
+      "tensor": "R"
+    },
+    {
+      "slot1": 2,
+      "type": "antisym",
+      "slot2": 3,
+      "tensor": "R"
+    },
+    {
+      "slot1": 1,
+      "slot3": 3,
+      "type": "bianchi",
+      "slot2": 2,
+      "tensor": "R"
+    }
+  ],
+  "expr": {
+    "name": "R",
+    "indices": [
+      {
+        "name": "b",
+        "position": "down"
+      },
+      {
+        "name": "a",
+        "position": "down"
+      },
+      {
+        "name": "d",
+        "position": "down"
+      },
+      {
+        "name": "c",
+        "position": "down"
+      }
+    ],
+    "type": "tensor"
+  },
+  "result": {
+    "name": "R",
+    "indices": [
+      {
+        "name": "a",
+        "position": "down"
+      },
+      {
+        "name": "b",
+        "position": "down"
+      },
+      {
+        "name": "c",
+        "position": "down"
+      },
+      {
+        "name": "d",
+        "position": "down"
+      }
+    ],
+    "type": "tensor"
+  }
+}
+

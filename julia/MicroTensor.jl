@@ -11,7 +11,8 @@ using JSON
 export Index, TExpr, Te, up, down
 export te_zero, te_scalar, te_tensor, te_smul, te_sum
 export Symmetry, Antisym, Sym, BianchiSym, Registry
-export simplify_traced, to_json, emit_trace
+export simplify_traced, canonicalize_traced, to_json, emit_trace
+export perm_to_transpositions, riemann_symmetries
 
 # ─────────────────────────────────────────────────────────────
 # IR types (must match shared/ir.md exactly)
@@ -115,10 +116,57 @@ function has_sym(reg::Registry, name::Symbol, s1::Int, s2::Int)
     end
 end
 
+"""
+    riemann_symmetries(tensor::Symbol) -> Vector{Symmetry}
+
+Return the elementary symmetry declarations for a Riemann-type tensor:
+antisym in slots (1,2), antisym in slots (3,4), and first Bianchi identity
+on slots (2,3,4). Pair symmetry (R_{abcd} = R_{cdab}) is deferred.
+"""
+function riemann_symmetries(tensor::Symbol)
+    [Antisym(tensor, 1, 2), Antisym(tensor, 3, 4),
+     BianchiSym(tensor, 2, 3, 4)]
+end
+
 function has_bianchi(reg::Registry, name::Symbol, s1::Int, s2::Int, s3::Int)
     any(reg.symmetries) do sym
         sym isa BianchiSym && sym.tensor == name && sym.slot1 == s1 && sym.slot2 == s2 && sym.slot3 == s3
     end
+end
+
+# ─────────────────────────────────────────────────────────────
+# Permutation decomposition
+# ─────────────────────────────────────────────────────────────
+
+"""
+    perm_to_transpositions(perm::Vector{Int}) -> Vector{Tuple{Int,Int}}
+
+Decompose a permutation into a sequence of elementary transpositions
+(2-element swaps) using bubble-sort decomposition.
+
+`perm` is 1-indexed: `perm[i]` is the value at position `i`.
+Returns 1-indexed (slot1, slot2) pairs that compose left-to-right
+to produce `perm` from the identity.
+
+Each transposition corresponds to one SwapSlots proof step.
+"""
+function perm_to_transpositions(perm::Vector{Int})
+    n = length(perm)
+    swaps = Tuple{Int,Int}[]
+    p = copy(perm)
+    for i in 1:n
+        # Find where value i currently sits
+        j = findfirst(==(i), p)
+        while j > i
+            # Swap p[j-1] and p[j] to bubble value i leftward
+            p[j-1], p[j] = p[j], p[j-1]
+            push!(swaps, (j-1, j))
+            j -= 1
+        end
+    end
+    # The bubble sort gives swaps that map perm → identity;
+    # reverse to get identity → perm (left-to-right composition).
+    return reverse(swaps)
 end
 
 # ─────────────────────────────────────────────────────────────
@@ -387,6 +435,39 @@ end
 function _simplify_sum(e::TExpr, reg::Registry, steps::Vector{ProofStep}, path::Vector{Int})
     # Non-sum expressions: nothing to do in MVP
     return e, steps
+end
+
+# ─────────────────────────────────────────────────────────────
+# Traced canonicalization
+# ─────────────────────────────────────────────────────────────
+
+"""
+    canonicalize_traced(e::TeTensor, reg::Registry) -> ProofTrace
+
+Canonicalize a tensor's indices by sorting alphabetically, emitting
+SwapSlots proof steps for each transposition. Uses the registry to
+determine antisym/sym for each swap.
+"""
+function canonicalize_traced(e::TeTensor, reg::Registry)
+    canonical = sort(e.indices, by=idx -> string(idx.name))
+    if canonical == e.indices
+        return ProofTrace(reg, e, ProofStep[], e)
+    end
+
+    # perm[i] = position of e.indices[i] in canonical ordering
+    perm = [findfirst(==(idx), canonical) for idx in e.indices]
+
+    # Sorting transpositions: reverse of perm_to_transpositions to go perm → identity
+    sorting_swaps = reverse(perm_to_transpositions(perm))
+
+    steps = ProofStep[]
+    current = e
+    for (s1, s2) in sorting_swaps
+        push!(steps, SwapSlots(e.name, s1, s2, Int[]))
+        current = apply_swap(current, reg, e.name, s1, s2)
+    end
+
+    ProofTrace(reg, e, steps, current)
 end
 
 # ─────────────────────────────────────────────────────────────

@@ -12,14 +12,16 @@ def idx_d : Index := ⟨"d", .down⟩
 
 variable {M : Type*} [AddCommGroup M] [Module ℚ M] (env : TEnv M)
 
-theorem bianchi_proof :
+theorem bianchi_proof
+    (h_bianchi_R_1_2_3 : env.isBianchi "R" 1 2 3)
+    :
     (sum (tensor "R" [idx_a, idx_b, idx_c, idx_d]) (sum (tensor "R" [idx_a, idx_d, idx_b, idx_c]) (tensor "R" [idx_a, idx_c, idx_d, idx_b]))).eval env =
     (zero).eval env := by
   simp only [TExpr.eval]
   have h1 : [idx_a, idx_d, idx_b, idx_c] = ([idx_a, idx_b, idx_c, idx_d]).cyclicPerm3 1 2 3 := by native_decide
   have h2 : [idx_a, idx_c, idx_d, idx_b] = (([idx_a, idx_b, idx_c, idx_d]).cyclicPerm3 1 2 3).cyclicPerm3 1 2 3 := by native_decide
   rw [h1, h2]
-  exact env.bianchi "R" [idx_a, idx_b, idx_c, idx_d] 1 2 3 (by decide) (by decide) (by decide)
+  exact env.bianchi "R" [idx_a, idx_b, idx_c, idx_d] 1 2 3 h_bianchi_R_1_2_3 (by decide) (by decide) (by decide)
 
 end Bianchi
 

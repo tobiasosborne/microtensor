@@ -77,13 +77,24 @@ def List.cyclicPerm3 {α : Type} (l : List α) (i j k : Nat) : List α :=
 def ratCoeff (n d : Int) : ℚ := (n : ℚ) / (d : ℚ)
 
 /-- An environment maps tensor configurations to values in M,
-    subject to antisymmetry and Bianchi constraints. -/
+    with registry-aware symmetry constraints. The predicates `isAntisym`,
+    `isSym`, `isBianchi` declare which (tensor, slot) combinations have
+    which symmetries; the constraints are conditional on these. -/
 structure TEnv (M : Type*) [AddCommGroup M] where
   lookup : String → List Index → M
+  isAntisym : String → Nat → Nat → Prop
+  isSym : String → Nat → Nat → Prop
+  isBianchi : String → Nat → Nat → Nat → Prop
   swap_neg : ∀ (name : String) (idxs : List Index) (s1 s2 : Nat),
+    isAntisym name s1 s2 →
     s1 < idxs.length → s2 < idxs.length →
     lookup name (idxs.swap s1 s2) = -(lookup name idxs)
+  swap_id : ∀ (name : String) (idxs : List Index) (s1 s2 : Nat),
+    isSym name s1 s2 →
+    s1 < idxs.length → s2 < idxs.length →
+    lookup name (idxs.swap s1 s2) = lookup name idxs
   bianchi : ∀ (name : String) (idxs : List Index) (s1 s2 s3 : Nat),
+    isBianchi name s1 s2 s3 →
     s1 < idxs.length → s2 < idxs.length → s3 < idxs.length →
     lookup name idxs +
     (lookup name (idxs.cyclicPerm3 s1 s2 s3) +

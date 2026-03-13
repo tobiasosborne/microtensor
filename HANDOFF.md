@@ -3,8 +3,9 @@
 ## What This Project Is
 
 A verified tensor algebra pipeline: Julia CAS computes tensor identities
-(e.g., Riemann antisymmetry, Bianchi identity), emits JSON proof traces, and
-a Lean 4 kernel replays them into machine-checked proofs backed by Mathlib.
+(e.g., Riemann antisymmetry, Bianchi identity, index canonicalization),
+emits JSON proof traces, and a Lean 4 kernel replays them into
+machine-checked proofs backed by Mathlib.
 
 **Repo:** https://github.com/tobiasosborne/microtensor (GPL-3.0)
 
@@ -18,7 +19,7 @@ to verify a growing subset of TensorGR.jl's output.
 | Branch | Status | Description |
 |--------|--------|-------------|
 | `master` | old | Original MVP with 7 axioms on TExpr |
-| `mathlib-foundations` | **current** | All axioms eliminated via Mathlib semantic eval + Bianchi identity |
+| `mathlib-foundations` | **current** | Axiom-free kernel + canonicalization via traced permutations |
 
 **TODO:** Merge `mathlib-foundations` into `master`.
 
@@ -38,130 +39,121 @@ the replayer generates a `.lean` proof, and `lake build` verifies it.
 
 | File | Purpose |
 |------|---------|
-| `lean/MicroTensor.lean` | IR types (`TExpr`, `Index`, `Position`), `ratCoeff`, `TEnv`, `TExpr.eval`, `List.swap`, `List.cyclicPerm3` |
-| `lean/Rules.lean` | 8 theorems about `eval` (formerly axioms), proved via Mathlib |
+| `lean/MicroTensor.lean` | IR types (`TExpr`, `Index`, `Position`), `ratCoeff`, `TEnv` (registry-aware), `TExpr.eval`, `List.swap`, `List.cyclicPerm3` |
+| `lean/Rules.lean` | 9 theorems about `eval` (including `eval_sym_swap`), proved via Mathlib |
 | `lean/Example.lean` | Hand-written proof: R_{abcd} + R_{abdc} = 0 |
-| `lean/Generated.lean` | Machine-generated proof from `trace.json` |
-| `lean/Generated2.lean` | Machine-generated proof from `trace2.json` |
-| `lean/Generated3.lean` | Machine-generated Bianchi identity proof from `trace3.json` |
+| `lean/Generated.lean` | Machine-generated: antisym R slots 2,3 |
+| `lean/Generated2.lean` | Machine-generated: antisym R slots 0,1 |
+| `lean/Generated3.lean` | Machine-generated: Bianchi identity |
+| `lean/Generated4.lean` | Machine-generated: metric tensor symmetry g_{ba} = g_{ab} |
+| `lean/Generated5.lean` | Machine-generated: canonicalize R_{badc} → R_{abcd} (multi-swap) |
 | `lean/lakefile.lean` | Lake config, Mathlib dependency |
 | `lean/lean-toolchain` | `leanprover/lean4:v4.29.0-rc6` (pinned to Mathlib) |
-| `scripts/replay.jl` | Trace → Lean proof generator |
-| `julia/MicroTensor.jl` | Julia-side tensor CAS + trace emitter |
+| `scripts/replay.jl` | Trace → Lean proof generator (handles antisym, sym, bianchi, multi-swap chains) |
+| `julia/MicroTensor.jl` | Julia-side tensor CAS + trace emitter + `canonicalize_traced` + `perm_to_transpositions` |
 | `shared/ir.md` | IR specification shared between Julia and Lean |
-| `trace.json`, `trace2.json` | Example traces (antisym slots 2,3 and 0,1) |
-| `trace3.json` | Bianchi identity trace (cyclic perm of slots 1,2,3) |
+| `trace.json` – `trace5.json` | Example traces (antisym, bianchi, sym, canonicalization) |
+| `trace_canon.json` | CAS-generated canonicalization trace (integration test artifact) |
 
-### How Axiom Elimination Works
+### Registry-Aware TEnv
 
-**Problem:** `TExpr` is a free inductive type — `sum zero e ≠ e` at the term
-level, so equational rules can't be theorems about `TExpr` equality.
+`TEnv` carries symmetry predicates that declare which (tensor, slot)
+combinations have which symmetries. Constraints are conditional:
 
-**Solution:** Define `TExpr.eval : TExpr → M` mapping into any `Module ℚ M`.
-The rules become theorems about `eval`:
-
+```lean
+structure TEnv (M : Type*) [AddCommGroup M] where
+  lookup    : String → List Index → M
+  isAntisym : String → Nat → Nat → Prop
+  isSym     : String → Nat → Nat → Prop
+  isBianchi : String → Nat → Nat → Nat → Prop
+  swap_neg  : ∀ ... isAntisym name s1 s2 → ... lookup (swap) = -lookup
+  swap_id   : ∀ ... isSym name s1 s2 → ... lookup (swap) = lookup
+  bianchi   : ∀ ... isBianchi name s1 s2 s3 → ... cyclic sum = 0
 ```
-eval env (sum zero e) = eval env e          -- zero_add in M
-eval env (smul 0 d e) = eval env zero       -- zero_smul in M
-eval env (smul a_n a_d (smul b_n b_d e))    -- smul_smul in M
-  = eval env (smul (a_n*b_n) (a_d*b_d) e)
+
+Generated proofs take symmetry declarations as theorem hypotheses:
+```lean
+theorem canon_proof
+    (h_antisym_R_0_1 : env.isAntisym "R" 0 1)
+    (h_antisym_R_2_3 : env.isAntisym "R" 2 3) :
+    (tensor "R" [b,a,d,c]).eval env = (tensor "R" [a,b,c,d]).eval env := by ...
 ```
-
-**Environment (`TEnv M`)** carries three things:
-- `lookup : String → List Index → M` — maps tensor configs to module elements
-- `swap_neg` — antisymmetry constraint: swapping in-bounds slots negates the lookup
-- `bianchi` — first Bianchi identity: cyclic permutation of 3 slots sums to zero
-
-**Mathlib imports** (via `MicroTensor.lean`):
-- `Mathlib.Algebra.Order.Field.Rat` — `Field ℚ` instance
-- `Mathlib.Algebra.Module.Basic` — `Module`, `smul_smul`, `add_smul`, etc.
-- `Mathlib.Tactic.FieldSimp` — `field_simp` for fraction arithmetic
 
 ### Proof Tactic Patterns
 
-The 8 theorems use these patterns:
+The 9 theorems use these patterns:
 
 | Theorem | Key tactics |
 |---------|------------|
-| `eval_sum_zero_left/right` | `simp [TExpr.eval]` (uses `zero_add`/`add_zero`) |
-| `eval_smul_zero` | `simp [TExpr.eval, ratCoeff]` (uses `zero_div`, `zero_smul`) |
-| `eval_tensor_as_smul` | `simp [TExpr.eval, ratCoeff]` (uses `one_div_one`, `one_smul`) |
+| `eval_sum_zero_left/right` | `simp [TExpr.eval]` |
+| `eval_smul_zero` | `simp [TExpr.eval, ratCoeff]` |
+| `eval_tensor_as_smul` | `simp [TExpr.eval, ratCoeff]` |
 | `eval_smul_smul` | `smul_smul` + case split on zero denoms + `field_simp` |
-| `eval_collect_smul` | `add_smul` + `field_simp` (requires `(a_d : ℚ) ≠ 0`, `(b_d : ℚ) ≠ 0`) |
-| `eval_antisym_swap` | `simp` + `env.swap_neg` |
-| `eval_bianchi` | `simp` + `env.bianchi` |
+| `eval_collect_smul` | `add_smul` + `field_simp` (requires nonzero denoms) |
+| `eval_antisym_swap` | `simp` + `env.swap_neg` (takes `isAntisym` hypothesis) |
+| `eval_sym_swap` | `simp` + `env.swap_id` (takes `isSym` hypothesis) |
+| `eval_bianchi` | `simp` + `env.bianchi` (takes `isBianchi` hypothesis) |
 
-**Generated proofs** (from replayer) follow two patterns:
+**Generated proofs** (from replayer) follow three patterns:
 
-Antisymmetry (2-term, single swap):
+Antisymmetry (sum cancellation):
 ```lean
-simp only [TExpr.eval]                    -- unfold to module ops
-rw [h_swap, env.swap_neg "R" [...] ...]   -- apply antisymmetry
-exact add_neg_cancel _                     -- x + (-x) = 0
+simp only [TExpr.eval]
+rw [hs1, env.swap_neg "R" [...] s1 s2 h_antisym (by decide) (by decide)]
+exact add_neg_cancel _
 ```
 
-Bianchi identity (3-term, cyclic permutation):
+Canonicalization (multi-swap chain):
 ```lean
-simp only [TExpr.eval]                    -- unfold to module ops
-rw [h1, h2]                               -- rewrite indices as cyclicPerm3
-exact env.bianchi "R" [...] s1 s2 s3 ...  -- apply Bianchi constraint
+simp only [TExpr.eval]
+rw [hs1, env.swap_neg "R" [...] 0 1 h_antisym_01 (by decide) (by decide)]
+rw [hs2, env.swap_neg "R" [...] 2 3 h_antisym_23 (by decide) (by decide)]
+simp  -- resolves nested negations (neg_neg)
+```
+
+Bianchi identity (cyclic permutation):
+```lean
+simp only [TExpr.eval]
+rw [h1, h2]
+exact env.bianchi "R" [...] 1 2 3 h_bianchi (by decide) (by decide) (by decide)
 ```
 
 ### Known Design Decisions
 
-1. **`collect_smul` requires nonzero denominators.** The fraction identity
-   `a/b + c/d = (ad+bc)/bd` fails when `b=0` or `d=0` in ℚ. The replayer
-   discharges these with `(by norm_num)` since denominators are always nonzero
-   literal ints in practice.
-
-2. **`smul_smul` handles zero denominators via case split.** The multiplication
-   identity `(a/b)*(c/d) = (ac)/(bd)` holds even when `b=0` or `d=0` (both
-   sides are 0). Proved by `by_cases` on `(a_d : ℚ) = 0`.
-
-3. **`TExpr.eval` is `noncomputable`.** It uses ℚ division which is
-   noncomputable in Lean. This is fine — we only need it for proofs, not
-   code extraction.
-
-4. **`TExpr.scalar` maps to `0`.** No axiom mentions `scalar`, so the
-   interpretation is arbitrary. Could be refined later if scalar rules are added.
-
-5. **`TEnv.swap_neg` and `TEnv.bianchi` are unconditional.** They say ALL
-   tensors satisfy antisymmetry and the Bianchi identity for ALL in-bounds
-   slot combinations, matching the original axiom's universality. The
-   Julia-side registry check ensures they are only *applied* for declared
-   symmetries.
+1. **`collect_smul` requires nonzero denominators.** Discharged with `(by norm_num)`.
+2. **`smul_smul` handles zero denominators via case split.**
+3. **`TExpr.eval` is `noncomputable`.** Uses ℚ division; fine for proofs.
+4. **`TExpr.scalar` maps to `0`.** Arbitrary; refine if scalar rules are added.
+5. **`perm_to_transpositions` uses bubble-sort decomposition.** O(n²) worst-case.
+   Tracked as `g9z.7` to replace with cycle decomposition for minimal transposition count.
 
 ## What's Working
 
-- `lake build` passes all 6 targets (804 jobs, 0 errors)
+- `lake build` passes all 8 targets (808 jobs, 0 errors)
 - `lean_verify` shows only Lean built-in axioms (propext, Classical.choice, Quot.sound)
 - Zero `axiom` declarations, zero `sorry`s
-- Replayer (`scripts/replay.jl`) generates valid eval-based proofs from traces
-- All three traces round-trip correctly:
+- Replayer generates valid eval-based proofs for antisym, sym, bianchi, and multi-swap chains
+- All traces round-trip correctly:
   - `trace.json` — antisymmetry in slots 2,3: R_{abcd} + R_{abdc} = 0
   - `trace2.json` — antisymmetry in slots 0,1: R_{abcd} + R_{bacd} = 0
   - `trace3.json` — first Bianchi identity: R_{abcd} + R_{adbc} + R_{acdb} = 0
+  - `trace4.json` — metric symmetry: g_{ba} = g_{ab}
+  - `trace_canon.json` — canonicalization: R_{badc} = R_{abcd} (CAS-generated, 2 swaps)
+- Julia CAS: `canonicalize_traced`, `perm_to_transpositions`, `riemann_symmetries`
 - `.gitignore` covers `.lake/` build artifacts
 
 ## What's Next — Tracked in Beads
 
 Work is tracked via `bd` (beads). Run `bd list` to see all issues.
 
-### Workstream 1: Canonicalization via Traced Permutations (`microtensor-g9z`)
+### Workstream 1: Canonicalization — COMPLETE (`microtensor-g9z`)
 
-Connect TensorGR.jl's xperm canonicalization engine to MicroTensor's verified
-kernel. Decompose canonical permutations into elementary transpositions, emit
-each as a SwapSlots step, let Lean verify each swap.
+All 6 tasks closed. Full pipeline working: Julia CAS decomposes permutations
+into transpositions, emits traced swap steps, replayer generates Lean proofs
+with registry-aware symmetry hypotheses, `lake build` verifies.
 
-**Dependency chain:**
-```
-g9z.1  swap_id + eval_sym_swap ──┬──► g9z.2  Sym in replayer ──┐
-                                 │                              ├──► g9z.4  Multi-swap chains ──┐
-                                 │    g9z.3  Perm decomposition ┘                               ├──► g9z.6  Integration test
-                                 └──► g9z.5  Compound symmetries ───────────────────────────────┘
-```
-
-**Ready tasks (no blockers):** `g9z.1`, `g9z.3`
+One follow-up: `g9z.7` (P3) — replace bubble-sort decomposition with
+cycle-decomposition for minimal transposition count.
 
 ### Workstream 2: Tensor Products + Index Contraction (`microtensor-4hj`)
 
@@ -176,24 +168,21 @@ contracted quantities like g^{ab}R_{abcd} = Ric_{cd} and scalar invariants.
                                                                                            └──► 4hj.6  Metric contraction ────────────────┘
 ```
 
-**Ready task (no blockers):** `4hj.1`
+**Ready task (no blockers):** `4hj.1` (add `TExpr.prod` to IR)
 
 ### Recommended starting point
 
-Start with **Workstream 1** — it builds directly on existing infrastructure
-(SwapSlots, swap_neg are already working) and requires the least new Lean
-design work. The entry point is `g9z.1` (add swap_id to TEnv).
-
-**Workstream 2** is higher impact but needs significant new Lean design
-(bilinear maps for products, contraction semantics). Start with `4hj.1`
-(add prod to IR) once Workstream 1 has momentum.
+Start with **`4hj.1`** — add `TExpr.prod` to the IR in both Julia and Lean.
+This is the entry point for Workstream 2. Design decision needed: how to
+represent the bilinear product in `TExpr.eval` (Mathlib's `TensorProduct`
+or a simpler `lookup2` in TEnv).
 
 ### Other items (not yet tracked)
 
 - **Merge `mathlib-foundations` into `master`** — trivial fast-forward merge
 - **CI pipeline** — GitHub Actions with `lake exe cache get`
-- **Registry-aware TEnv** — make constraints conditional on declared symmetries
 - **AlternatingMap** — replace swap_neg with Mathlib's `AlternatingMap.map_swap`
+- **Pair symmetry** — R_{abcd} = R_{cdab} requires swapping two pairs simultaneously
 
 ## Build Instructions
 
@@ -201,13 +190,15 @@ design work. The entry point is `g9z.1` (add swap_id to TEnv).
 cd lean
 lake update                  # fetch Mathlib (first time only)
 lake exe cache get           # download prebuilt Mathlib oleans (~8000 files)
-lake build                   # build all targets
+lake build                   # build all targets (808 jobs)
 
 # Regenerate from traces
 cd ..
 julia scripts/replay.jl trace.json generated_proof > lean/Generated.lean
 julia scripts/replay.jl trace2.json generated_proof_12 Proof12 > lean/Generated2.lean
 julia scripts/replay.jl trace3.json bianchi_proof Bianchi > lean/Generated3.lean
+julia scripts/replay.jl trace4.json metric_sym_proof MetricSym > lean/Generated4.lean
+julia scripts/replay.jl trace_canon.json canon_integration Canon > lean/Generated5.lean
 ```
 
 ## Verification
@@ -217,11 +208,10 @@ julia scripts/replay.jl trace3.json bianchi_proof Bianchi > lean/Generated3.lean
 grep -n "^axiom" lean/Rules.lean       # should return nothing
 
 # Via Lean MCP (in Claude Code):
-lean_verify file_path="lean/Rules.lean" theorem_name="eval_antisym_swap"
+lean_verify file_path="lean/Rules.lean" theorem_name="eval_sym_swap"
 # Should show only: propext, Classical.choice, Quot.sound
 
 # Issue tracker
 bd list                                # see all tracked work
-bd show microtensor-g9z                # canonicalization epic details
 bd show microtensor-4hj                # products+contraction epic details
 ```
