@@ -58,6 +58,17 @@ def List.swap {α : Type} (l : List α) (i j : Nat) : List α :=
       else v
   | _, _ => l
 
+/-- Cyclic permutation of three positions in a list: i←k, j←i, k←j. -/
+def List.cyclicPerm3 {α : Type} (l : List α) (i j k : Nat) : List α :=
+  match l[i]?, l[j]?, l[k]? with
+  | some vi, some vj, some vk =>
+    l.mapIdx fun idx v =>
+      if idx == i then vk
+      else if idx == j then vi
+      else if idx == k then vj
+      else v
+  | _, _, _ => l
+
 -- ─────────────────────────────────────────────────────────────
 -- Semantic evaluation: map TExpr into a ℚ-module
 -- ─────────────────────────────────────────────────────────────
@@ -66,12 +77,17 @@ def List.swap {α : Type} (l : List α) (i j : Nat) : List α :=
 def ratCoeff (n d : Int) : ℚ := (n : ℚ) / (d : ℚ)
 
 /-- An environment maps tensor configurations to values in M,
-    subject to an antisymmetry constraint on slot swaps. -/
+    subject to antisymmetry and Bianchi constraints. -/
 structure TEnv (M : Type*) [AddCommGroup M] where
   lookup : String → List Index → M
   swap_neg : ∀ (name : String) (idxs : List Index) (s1 s2 : Nat),
     s1 < idxs.length → s2 < idxs.length →
     lookup name (idxs.swap s1 s2) = -(lookup name idxs)
+  bianchi : ∀ (name : String) (idxs : List Index) (s1 s2 s3 : Nat),
+    s1 < idxs.length → s2 < idxs.length → s3 < idxs.length →
+    lookup name idxs +
+    (lookup name (idxs.cyclicPerm3 s1 s2 s3) +
+     lookup name ((idxs.cyclicPerm3 s1 s2 s3).cyclicPerm3 s1 s2 s3)) = 0
 
 /-- Interpret a tensor expression in a ℚ-module via an environment. -/
 noncomputable def TExpr.eval {M : Type*} [AddCommGroup M] [Module ℚ M]

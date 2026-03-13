@@ -32,6 +32,9 @@ No `Prod` (tensor products) in the MVP — we only need single tensors and their
 Symmetry :=
   | Antisym(tensor : String, slot1 : Nat, slot2 : Nat)
   | Sym(tensor : String, slot1 : Nat, slot2 : Nat)
+  | Bianchi(tensor : String, slot1 : Nat, slot2 : Nat, slot3 : Nat)
+    -- First Bianchi identity: cyclic permutation of 3 slots sums to zero.
+    -- cyclicPerm3 sends: pos i←k, j←i, k←j.
 ```
 
 ## Proof steps
@@ -54,6 +57,11 @@ ProofStep :=
 
   | SumZero(path : List Nat)
     -- At the given position, replace Sum(Zero, e) with e or Sum(e, Zero) with e.
+
+  | BianchiCyclic(tensor : String, slot1 : Nat, slot2 : Nat, slot3 : Nat, path : List Nat)
+    -- At the given position, a 3-term sum Sum(T[idxs], Sum(T[perm1], T[perm2]))
+    -- where perm1 = cyclicPerm3(idxs, s1, s2, s3) and perm2 = cyclicPerm3(perm1, s1, s2, s3)
+    -- is replaced with Zero by the first Bianchi identity.
 ```
 
 ## Trace format
@@ -83,4 +91,4 @@ Two expressions are **equal** if one can be transformed into the other by a fini
 - Canonicalisation (xperm.c) — we do manual symmetry application instead
 - Any CAS integration
 
-All of these are future work. The MVP proves one identity with three rules.
+All of these are future work. The MVP proves identities with antisymmetry and Bianchi rules.

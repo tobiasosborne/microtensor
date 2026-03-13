@@ -15,3 +15,7 @@ theoria-proto/extracted/
 # Editor
 .vscode/
 *.swp
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

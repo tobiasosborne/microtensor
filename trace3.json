@@ -1,0 +1,109 @@
+{
+  "steps": [
+    {
+      "path": [],
+      "slot1": 1,
+      "slot3": 3,
+      "rule": "bianchi_cyclic",
+      "slot2": 2,
+      "tensor": "R"
+    }
+  ],
+  "registry": [
+    {
+      "slot1": 2,
+      "type": "antisym",
+      "slot2": 3,
+      "tensor": "R"
+    },
+    {
+      "slot1": 0,
+      "type": "antisym",
+      "slot2": 1,
+      "tensor": "R"
+    },
+    {
+      "slot1": 1,
+      "slot3": 3,
+      "type": "bianchi",
+      "slot2": 2,
+      "tensor": "R"
+    }
+  ],
+  "expr": {
+    "left": {
+      "name": "R",
+      "indices": [
+        {
+          "name": "a",
+          "position": "down"
+        },
+        {
+          "name": "b",
+          "position": "down"
+        },
+        {
+          "name": "c",
+          "position": "down"
+        },
+        {
+          "name": "d",
+          "position": "down"
+        }
+      ],
+      "type": "tensor"
+    },
+    "right": {
+      "left": {
+        "name": "R",
+        "indices": [
+          {
+            "name": "a",
+            "position": "down"
+          },
+          {
+            "name": "d",
+            "position": "down"
+          },
+          {
+            "name": "b",
+            "position": "down"
+          },
+          {
+            "name": "c",
+            "position": "down"
+          }
+        ],
+        "type": "tensor"
+      },
+      "right": {
+        "name": "R",
+        "indices": [
+          {
+            "name": "a",
+            "position": "down"
+          },
+          {
+            "name": "c",
+            "position": "down"
+          },
+          {
+            "name": "d",
+            "position": "down"
+          },
+          {
+            "name": "b",
+            "position": "down"
+          }
+        ],
+        "type": "tensor"
+      },
+      "type": "sum"
+    },
+    "type": "sum"
+  },
+  "result": {
+    "type": "zero"
+  }
+}
+

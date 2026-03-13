@@ -10,7 +10,7 @@ using JSON
 
 export Index, TExpr, Te, up, down
 export te_zero, te_scalar, te_tensor, te_smul, te_sum
-export Symmetry, Antisym, Sym, Registry
+export Symmetry, Antisym, Sym, BianchiSym, Registry
 export simplify_traced, to_json, emit_trace
 
 # ─────────────────────────────────────────────────────────────
@@ -96,6 +96,7 @@ end
 abstract type Symmetry end
 struct Antisym <: Symmetry; tensor::Symbol; slot1::Int; slot2::Int; end
 struct Sym <: Symmetry; tensor::Symbol; slot1::Int; slot2::Int; end
+struct BianchiSym <: Symmetry; tensor::Symbol; slot1::Int; slot2::Int; slot3::Int; end
 
 struct Registry
     symmetries::Vector{Symmetry}
@@ -111,6 +112,12 @@ end
 function has_sym(reg::Registry, name::Symbol, s1::Int, s2::Int)
     any(reg.symmetries) do sym
         sym isa Sym && sym.tensor == name && sym.slot1 == s1 && sym.slot2 == s2
+    end
+end
+
+function has_bianchi(reg::Registry, name::Symbol, s1::Int, s2::Int, s3::Int)
+    any(reg.symmetries) do sym
+        sym isa BianchiSym && sym.tensor == name && sym.slot1 == s1 && sym.slot2 == s2 && sym.slot3 == s3
     end
 end
 
@@ -136,6 +143,14 @@ struct ZeroElim <: ProofStep
 end
 
 struct SumZero <: ProofStep
+    path::Vector{Int}
+end
+
+struct BianchiCyclic <: ProofStep
+    tensor::Symbol
+    slot1::Int
+    slot2::Int
+    slot3::Int
     path::Vector{Int}
 end
 
@@ -238,26 +253,88 @@ function apply_sum_zero(e::TExpr)
     error("SumZero: neither side is zero")
 end
 
+"""Cyclic permutation of 3 positions: i←k, j←i, k←j."""
+function cyclic_perm3(indices::Vector{Index}, s1::Int, s2::Int, s3::Int)
+    result = copy(indices)
+    result[s1] = indices[s3]
+    result[s2] = indices[s1]
+    result[s3] = indices[s2]
+    return result
+end
+
 # ─────────────────────────────────────────────────────────────
 # Traced simplification
 # ─────────────────────────────────────────────────────────────
 
-"""
-    simplify_traced(expr, registry) → ProofTrace
+"""Flatten a right-associated sum into a list of terms."""
+function flatten_sum(e::TExpr)
+    e isa TeSum || return [e]
+    vcat(flatten_sum(e.left), flatten_sum(e.right))
+end
 
-Simplify the expression, recording each step.
-This is the MVP simplifier — it only handles the specific pattern
-of "sum of tensors related by slot symmetry."
-"""
+"""Get the tensor name and indices from a term (plain tensor or smul of tensor)."""
+function tensor_info(e::TExpr)
+    if e isa TeTensor
+        return e.name, e.indices
+    elseif e isa TeSMul && e.expr isa TeTensor
+        return e.expr.name, e.expr.indices
+    end
+    return nothing
+end
+
 function simplify_traced(expr::TExpr, reg::Registry)
     steps = ProofStep[]
     current = expr
 
-    # Strategy: find pairs in a sum that differ only by a slot swap,
-    # apply the swap, collect, eliminate zeros.
-    current, steps = _simplify_sum(current, reg, steps, Int[])
+    # Try Bianchi simplification first (3-term sums)
+    current, steps = _simplify_bianchi(current, reg, steps, Int[])
+
+    # Then try pairwise swap simplification
+    if current == expr  # no Bianchi simplification happened
+        current, steps = _simplify_sum(current, reg, steps, Int[])
+    end
 
     ProofTrace(reg, expr, steps, current)
+end
+
+"""Check if three tensor terms form a Bianchi pattern (cyclic permutation of 3 slots)."""
+function _simplify_bianchi(e::TeSum, reg::Registry, steps::Vector{ProofStep}, path::Vector{Int})
+    terms = flatten_sum(e)
+    length(terms) == 3 || return e, steps
+
+    # All terms must be the same tensor
+    infos = [tensor_info(t) for t in terms]
+    all(i -> i !== nothing, infos) || return e, steps
+    names = [i[1] for i in infos]
+    all(n -> n == names[1], names) || return e, steps
+
+    name = names[1]
+    idxs = [i[2] for i in infos]
+    n = length(idxs[1])
+    all(idx -> length(idx) == n, idxs) || return e, steps
+
+    # Try all triples of slots to find a cyclic permutation
+    for s1 in 1:n, s2 in 1:n, s3 in 1:n
+        s1 == s2 && continue
+        s1 == s3 && continue
+        s2 == s3 && continue
+
+        perm1 = cyclic_perm3(idxs[1], s1, s2, s3)
+        perm2 = cyclic_perm3(perm1, s1, s2, s3)
+
+        if perm1 == idxs[2] && perm2 == idxs[3]
+            if has_bianchi(reg, name, s1, s2, s3)
+                push!(steps, BianchiCyclic(name, s1, s2, s3, path))
+                return TeZero(), steps
+            end
+        end
+    end
+
+    return e, steps
+end
+
+function _simplify_bianchi(e::TExpr, reg::Registry, steps::Vector{ProofStep}, path::Vector{Int})
+    return e, steps
 end
 
 function _simplify_sum(e::TeSum, reg::Registry, steps::Vector{ProofStep}, path::Vector{Int})
@@ -350,6 +427,12 @@ end
 function step_to_dict(s::SumZero)
     Dict("rule" => "sum_zero", "path" => s.path)
 end
+function step_to_dict(s::BianchiCyclic)
+    # Convert 1-indexed Julia slots to 0-indexed for JSON/Lean
+    Dict("rule" => "bianchi_cyclic", "tensor" => string(s.tensor),
+         "slot1" => s.slot1 - 1, "slot2" => s.slot2 - 1, "slot3" => s.slot3 - 1,
+         "path" => s.path)
+end
 
 function sym_to_dict(s::Antisym)
     # Convert 1-indexed Julia slots to 0-indexed for JSON/Lean
@@ -359,6 +442,10 @@ end
 function sym_to_dict(s::Sym)
     Dict("type" => "sym", "tensor" => string(s.tensor),
          "slot1" => s.slot1 - 1, "slot2" => s.slot2 - 1)
+end
+function sym_to_dict(s::BianchiSym)
+    Dict("type" => "bianchi", "tensor" => string(s.tensor),
+         "slot1" => s.slot1 - 1, "slot2" => s.slot2 - 1, "slot3" => s.slot3 - 1)
 end
 
 function trace_to_json(trace::ProofTrace)

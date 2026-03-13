@@ -96,6 +96,16 @@ function get_at_path(e::Dict, path::Vector)
     end
 end
 
+"""Compute cyclic permutation of 3 positions (0-indexed): i←k, j←i, k←j."""
+function cyclic_perm3_indices(indices::Vector, s1::Int, s2::Int, s3::Int)
+    # s1, s2, s3 are 0-indexed here (from JSON)
+    result = copy(indices)
+    result[s1+1] = indices[s3+1]
+    result[s2+1] = indices[s1+1]
+    result[s3+1] = indices[s2+1]
+    return result
+end
+
 """Get the tensor at a swap step target."""
 function get_swap_info(expr::Dict, step::Dict)
     path = Int.(step["path"])
@@ -163,6 +173,8 @@ function generate_lean(trace::Dict; theorem_name::String="generated_proof",
     current_expr = trace["expr"]
     swap_count = 0
 
+    bianchi_used = false
+
     for (i, step) in enumerate(steps)
         rule = step["rule"]
 
@@ -189,19 +201,48 @@ function generate_lean(trace::Dict; theorem_name::String="generated_proof",
                     "expr" => Dict("type" => "tensor", "name" => tensor_name, "indices" => canon_idxs))
             end
             current_expr = replace_at_path(current_expr, path, new_node)
+
+        elseif rule == "bianchi_cyclic"
+            bianchi_used = true
+            tensor_name = step["tensor"]
+            s1, s2, s3 = step["slot1"], step["slot2"], step["slot3"]
+
+            # Get the three terms from the sum structure
+            path = Int.(step["path"])
+            target = get_at_path(current_expr, path)
+
+            # Extract the original (first) term's indices
+            first_term = target["left"]
+            if first_term["type"] == "tensor"
+                orig_idxs = first_term["indices"]
+            elseif first_term["type"] == "smul"
+                orig_idxs = first_term["expr"]["indices"]
+            end
+
+            orig_lean = "[" * join([lean_idx_name(idx["name"]) for idx in orig_idxs], ", ") * "]"
+
+            # Compute the cyclic permutations
+            perm1_idxs = cyclic_perm3_indices(orig_idxs, s1, s2, s3)
+            perm2_idxs = cyclic_perm3_indices(perm1_idxs, s1, s2, s3)
+
+            perm1_lean = "[" * join([lean_idx_name(idx["name"]) for idx in perm1_idxs], ", ") * "]"
+            perm2_lean = "[" * join([lean_idx_name(idx["name"]) for idx in perm2_idxs], ", ") * "]"
+
+            push!(lines, "  have h1 : $perm1_lean = ($orig_lean).cyclicPerm3 $s1 $s2 $s3 := by native_decide")
+            push!(lines, "  have h2 : $perm2_lean = (($orig_lean).cyclicPerm3 $s1 $s2 $s3).cyclicPerm3 $s1 $s2 $s3 := by native_decide")
+            push!(lines, "  rw [h1, h2]")
+            push!(lines, """  exact env.bianchi "$tensor_name" $orig_lean $s1 $s2 $s3 (by decide) (by decide) (by decide)""")
         end
         # collect, zero_elim, sum_zero are handled by the closing tactic
     end
 
-    # Step 3: Close the goal — after all swaps, the module algebra should resolve
-    # For simple antisymmetry (x + (-x) = 0), add_neg_cancel works.
-    # For more complex cases, simp with module lemmas handles it.
-    if swap_count == 1 && length(steps) <= 3
-        # Simple case: one swap, result is zero → add_neg_cancel
-        push!(lines, "  exact add_neg_cancel _")
-    else
-        # General case: use simp with module lemmas
-        push!(lines, "  simp [ratCoeff, add_neg_cancel, neg_add_cancel]")
+    # Step 3: Close the goal (not needed if bianchi was used — it closes directly)
+    if !bianchi_used
+        if swap_count == 1 && length(steps) <= 3
+            push!(lines, "  exact add_neg_cancel _")
+        else
+            push!(lines, "  simp [ratCoeff, add_neg_cancel, neg_add_cancel]")
+        end
     end
 
     if namespace !== nothing

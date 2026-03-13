@@ -32,6 +32,20 @@ theorem eval_antisym_swap (name : String) (idxs : List Index) (s1 s2 : Nat)
   exact env.swap_neg name idxs s1 s2 h h2
 
 -- ─────────────────────────────────────────────────────────────
+-- Rule 1b: First Bianchi identity
+-- Cyclic permutation of three slots sums to zero.
+-- ─────────────────────────────────────────────────────────────
+
+theorem eval_bianchi (name : String) (idxs : List Index) (s1 s2 s3 : Nat)
+    (h1 : s1 < idxs.length) (h2 : s2 < idxs.length) (h3 : s3 < idxs.length) :
+    (sum (tensor name idxs)
+         (sum (tensor name (idxs.cyclicPerm3 s1 s2 s3))
+              (tensor name ((idxs.cyclicPerm3 s1 s2 s3).cyclicPerm3 s1 s2 s3)))).eval env =
+    zero.eval env := by
+  simp [TExpr.eval]
+  exact env.bianchi name idxs s1 s2 s3 h1 h2 h3
+
+-- ─────────────────────────────────────────────────────────────
 -- Rule 2: Scalar collection
 -- a·e + b·e = (a+b)·e (with rational arithmetic)
 -- ─────────────────────────────────────────────────────────────
