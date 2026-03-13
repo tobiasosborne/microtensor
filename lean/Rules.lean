@@ -11,6 +11,8 @@
     3. Zero elimination: 0·e = 0
     4. Sum identity: 0 + e = e, e + 0 = e
     5. SMul composition: a·(b·e) = (a*b)·e
+    6. Product rules: bilinearity of tensor product
+    7. Contraction rules: linearity of index contraction
 -/
 
 import MicroTensor
@@ -115,3 +117,55 @@ theorem eval_smul_smul (a_n a_d b_n b_d : Int) (e : TExpr) :
   by_cases ha : (a_d : ℚ) = 0 <;> simp_all [div_zero]
   by_cases hb : (b_d : ℚ) = 0 <;> simp_all [div_zero, mul_zero]
   field_simp
+
+-- ─────────────────────────────────────────────────────────────
+-- Rule 6: Product bilinearity
+-- Tensor product distributes over sums and commutes with scalars.
+-- ─────────────────────────────────────────────────────────────
+
+theorem eval_prod_sum_left (a b c : TExpr) :
+    (prod (sum a b) c).eval env =
+    (sum (prod a c) (prod b c)).eval env := by
+  simp [TExpr.eval, env.mul_add_left]
+
+theorem eval_prod_sum_right (a b c : TExpr) :
+    (prod a (sum b c)).eval env =
+    (sum (prod a b) (prod a c)).eval env := by
+  simp [TExpr.eval, env.mul_add_right]
+
+theorem eval_prod_smul_left (n d : Int) (a b : TExpr) :
+    (prod (smul n d a) b).eval env =
+    (smul n d (prod a b)).eval env := by
+  simp [TExpr.eval, env.smul_mul_left]
+
+theorem eval_prod_smul_right (n d : Int) (a b : TExpr) :
+    (prod a (smul n d b)).eval env =
+    (smul n d (prod a b)).eval env := by
+  simp [TExpr.eval, env.smul_mul_right]
+
+theorem eval_prod_zero_left (a : TExpr) :
+    (prod zero a).eval env = zero.eval env := by
+  simp [TExpr.eval, env.mul_zero_left]
+
+theorem eval_prod_zero_right (a : TExpr) :
+    (prod a zero).eval env = zero.eval env := by
+  simp [TExpr.eval, env.mul_zero_right]
+
+-- ─────────────────────────────────────────────────────────────
+-- Rule 7: Contraction linearity
+-- Contraction distributes over sums and commutes with scalars.
+-- ─────────────────────────────────────────────────────────────
+
+theorem eval_contract_sum (i j : Nat) (a b : TExpr) :
+    (contract i j (sum a b)).eval env =
+    (sum (contract i j a) (contract i j b)).eval env := by
+  simp [TExpr.eval, env.contractAt_add]
+
+theorem eval_contract_smul (i j : Nat) (n d : Int) (a : TExpr) :
+    (contract i j (smul n d a)).eval env =
+    (smul n d (contract i j a)).eval env := by
+  simp [TExpr.eval, env.contractAt_smul]
+
+theorem eval_contract_zero (i j : Nat) :
+    (contract i j zero).eval env = zero.eval env := by
+  simp [TExpr.eval, env.contractAt_zero]

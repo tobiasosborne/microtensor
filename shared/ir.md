@@ -19,12 +19,13 @@ TExpr :=
   | Tensor(name : String, indices : List Index)
   | SMul(coeff : Rational, expr : TExpr)
   | Sum(left : TExpr, right : TExpr)
+  | Prod(left : TExpr, right : TExpr)
+  | Contract(slot1 : Nat, slot2 : Nat, expr : TExpr)
 ```
 
-Binary `Sum` only. N-ary sums in Julia are flattened to right-associated binary:
-`a + b + c` = `Sum(a, Sum(b, c))`.
-
-No `Prod` (tensor products) in the MVP — we only need single tensors and their sums.
+Binary `Sum` and `Prod`. N-ary sums/products in Julia are flattened to
+right-associated binary: `a + b + c` = `Sum(a, Sum(b, c))`,
+`a ⊗ b ⊗ c` = `Prod(a, Prod(b, c))`.
 
 ## Symmetry declarations
 
@@ -62,6 +63,24 @@ ProofStep :=
     -- At the given position, a 3-term sum Sum(T[idxs], Sum(T[perm1], T[perm2]))
     -- where perm1 = cyclicPerm3(idxs, s1, s2, s3) and perm2 = cyclicPerm3(perm1, s1, s2, s3)
     -- is replaced with Zero by the first Bianchi identity.
+
+  | ProdSmulLeft(path : List Nat)
+    -- Prod(SMul(c, a), b) → SMul(c, Prod(a, b))
+
+  | ProdSmulRight(path : List Nat)
+    -- Prod(a, SMul(c, b)) → SMul(c, Prod(a, b))
+
+  | ProdSumLeft(path : List Nat)
+    -- Prod(Sum(a, b), c) → Sum(Prod(a, c), Prod(b, c))
+
+  | ProdSumRight(path : List Nat)
+    -- Prod(a, Sum(b, c)) → Sum(Prod(a, b), Prod(a, c))
+
+  | ProdZeroLeft(path : List Nat)
+    -- Prod(Zero, a) → Zero
+
+  | ProdZeroRight(path : List Nat)
+    -- Prod(a, Zero) → Zero
 ```
 
 ## Trace format
@@ -83,7 +102,7 @@ Two expressions are **equal** if one can be transformed into the other by a fini
 
 ## What is deliberately NOT in the MVP
 
-- Tensor products (contractions, index raising/lowering)
+- Metric contraction rules (env-level constraints relating `contractAt` to `mul` and `lookup`)
 - Derivatives
 - Metric
 - Grassmann parity

@@ -47,9 +47,9 @@ function _collect!(idxs::Dict, e::Dict)
         for idx in e["indices"]
             idxs[idx["name"]] = idx
         end
-    elseif t == "smul"
+    elseif t == "smul" || t == "contract"
         _collect!(idxs, e["expr"])
-    elseif t == "sum"
+    elseif t == "sum" || t == "prod"
         _collect!(idxs, e["left"])
         _collect!(idxs, e["right"])
     end
@@ -72,6 +72,10 @@ function lean_expr_with_names(e::Dict)
         "smul $(e["num"]) $(e["den"]) ($(lean_expr_with_names(e["expr"])))"
     elseif t == "sum"
         "sum ($(lean_expr_with_names(e["left"]))) ($(lean_expr_with_names(e["right"])))"
+    elseif t == "prod"
+        "prod ($(lean_expr_with_names(e["left"]))) ($(lean_expr_with_names(e["right"])))"
+    elseif t == "contract"
+        "contract $(e["slot1"]) $(e["slot2"]) ($(lean_expr_with_names(e["expr"])))"
     else
         error("Unknown TExpr type: $t")
     end
@@ -87,9 +91,9 @@ function get_at_path(e::Dict, path::Vector)
     p = path[1]
     rest = path[2:end]
     t = e["type"]
-    if t == "sum"
+    if t == "sum" || t == "prod"
         get_at_path(p == 0 ? e["left"] : e["right"], rest)
-    elseif t == "smul"
+    elseif t == "smul" || t == "contract"
         get_at_path(e["expr"], rest)
     else
         error("Cannot descend into $t")
@@ -362,14 +366,17 @@ function replace_at_path(e::Dict, path::Vector, new_node::Dict)
     p = path[1]
     rest = path[2:end]
     t = e["type"]
-    if t == "sum"
+    if t == "sum" || t == "prod"
         if p == 0
-            Dict("type" => "sum", "left" => replace_at_path(e["left"], rest, new_node), "right" => e["right"])
+            Dict("type" => t, "left" => replace_at_path(e["left"], rest, new_node), "right" => e["right"])
         else
-            Dict("type" => "sum", "left" => e["left"], "right" => replace_at_path(e["right"], rest, new_node))
+            Dict("type" => t, "left" => e["left"], "right" => replace_at_path(e["right"], rest, new_node))
         end
     elseif t == "smul"
         Dict("type" => "smul", "num" => e["num"], "den" => e["den"],
+             "expr" => replace_at_path(e["expr"], rest, new_node))
+    elseif t == "contract"
+        Dict("type" => "contract", "slot1" => e["slot1"], "slot2" => e["slot2"],
              "expr" => replace_at_path(e["expr"], rest, new_node))
     else
         error("Cannot descend into $t at path $path")

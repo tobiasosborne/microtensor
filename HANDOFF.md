@@ -39,7 +39,7 @@ the replayer generates a `.lean` proof, and `lake build` verifies it.
 
 | File | Purpose |
 |------|---------|
-| `lean/MicroTensor.lean` | IR types (`TExpr`, `Index`, `Position`), `ratCoeff`, `TEnv` (registry-aware), `TExpr.eval`, `List.swap`, `List.cyclicPerm3` |
+| `lean/MicroTensor.lean` | IR types (`TExpr`, `Index`, `Position`), `ratCoeff`, `TEnv` (registry-aware, with `mul` for products), `TExpr.eval`, `List.swap`, `List.cyclicPerm3` |
 | `lean/Rules.lean` | 9 theorems about `eval` (including `eval_sym_swap`), proved via Mathlib |
 | `lean/Example.lean` | Hand-written proof: R_{abcd} + R_{abdc} = 0 |
 | `lean/Generated.lean` | Machine-generated: antisym R slots 2,3 |
@@ -63,6 +63,7 @@ combinations have which symmetries. Constraints are conditional:
 ```lean
 structure TEnv (M : Type*) [AddCommGroup M] where
   lookup    : String → List Index → M
+  mul       : M → M → M              -- binary op for tensor products
   isAntisym : String → Nat → Nat → Prop
   isSym     : String → Nat → Nat → Prop
   isBianchi : String → Nat → Nat → Nat → Prop
@@ -163,19 +164,35 @@ contracted quantities like g^{ab}R_{abcd} = Ric_{cd} and scalar invariants.
 **Dependency chain:**
 ```
 4hj.1  TExpr.prod IR ──┬──► 4hj.2  eval for products ──┬──► 4hj.3  Product rules ──────────┐
-                        │                                │                                    ├──► 4hj.7  Julia CAS ──► 4hj.8  Replayer ──┐
-                        └──► 4hj.4  TExpr.contract IR ───┴──► 4hj.5  Contract semantics ──┬──┘                                           ├──► 4hj.9  Integration test
-                                                                                           └──► 4hj.6  Metric contraction ────────────────┘
+  ✓ DONE                │     ✓ DONE                     │     ✓ DONE                         ├──► 4hj.7  Julia CAS ──► 4hj.8  Replayer ──┐
+                        └──► 4hj.4  TExpr.contract IR ───┴──► 4hj.5  Contract semantics ──┬──┘     ✓ DONE                                ├──► 4hj.9  Integration test
+                              ✓ DONE                           ✓ DONE                      └──► 4hj.6  Metric contraction ────────────────┘
 ```
 
-**Ready task (no blockers):** `4hj.1` (add `TExpr.prod` to IR)
+**Completed:**
+- `4hj.1` — TExpr.prod in IR (Lean + Julia + replayer + spec)
+- `4hj.2` — eval via `env.mul : M → M → M` with bilinearity constraints in TEnv
+- `4hj.3` — 6 product rule theorems (distribute over sum, factor out smul, zero)
+- `4hj.4` — TExpr.contract IR (Lean + Julia + replayer + spec)
+- `4hj.5` — Contract eval via `env.contractAt : Nat → Nat → M → M` (linear);
+  3 contraction rule theorems (distribute over sum, factor out smul, zero)
+- `4hj.7` — Julia CAS: product proof steps (ProdSmulLeft/Right, ProdSumLeft/Right,
+  ProdZeroLeft/Right), rule application functions, index analysis (all_indices,
+  dummy_pairs, free_indices)
+
+**Ready tasks (no blockers):** `4hj.6` (metric contraction), `4hj.8` (replayer for products)
 
 ### Recommended starting point
 
-Start with **`4hj.1`** — add `TExpr.prod` to the IR in both Julia and Lean.
-This is the entry point for Workstream 2. Design decision needed: how to
-represent the bilinear product in `TExpr.eval` (Mathlib's `TensorProduct`
-or a simpler `lookup2` in TEnv).
+4hj.1–4hj.5 and 4hj.7 are done. Two tasks remain before the integration test:
+
+- **`4hj.6`** — metric contraction rules. Add `isMetric` predicate to TEnv and
+  a constraint relating `contractAt` + `mul` + `lookup` for metric tensors.
+  E.g., contracting g^{ab} ⊗ R_{bcde} over b gives R^a_{cde}. This is the
+  last Lean theorem needed for the contraction pipeline.
+- **`4hj.8`** — replayer support for product/contraction proof steps. Add
+  handling for ProdSmulLeft/Right, ProdSumLeft/Right, ProdZeroLeft/Right
+  in the Lean proof generator.
 
 ### Other items (not yet tracked)
 

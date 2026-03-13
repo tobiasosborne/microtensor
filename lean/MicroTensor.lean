@@ -24,13 +24,15 @@ structure Index where
   position : Position
   deriving Repr, BEq, DecidableEq
 
-/-- Tensor expression IR. Binary sums, no products (MVP). -/
+/-- Tensor expression IR. Binary sums, products, and contraction. -/
 inductive TExpr where
   | zero : TExpr
   | scalar : Int → Int → TExpr   -- numerator, denominator (rational)
   | tensor : String → List Index → TExpr
   | smul : Int → Int → TExpr → TExpr  -- coeff num, den, inner expr
   | sum : TExpr → TExpr → TExpr
+  | prod : TExpr → TExpr → TExpr      -- tensor product (binary)
+  | contract : Nat → Nat → TExpr → TExpr  -- index contraction at slot positions
   deriving Repr, BEq
 
 /-- Symmetry declaration for a tensor. -/
@@ -79,9 +81,24 @@ def ratCoeff (n d : Int) : ℚ := (n : ℚ) / (d : ℚ)
 /-- An environment maps tensor configurations to values in M,
     with registry-aware symmetry constraints. The predicates `isAntisym`,
     `isSym`, `isBianchi` declare which (tensor, slot) combinations have
-    which symmetries; the constraints are conditional on these. -/
-structure TEnv (M : Type*) [AddCommGroup M] where
+    which symmetries; the constraints are conditional on these.
+    `mul` is a bilinear operation for evaluating tensor products.
+    `contractAt` is a linear operation for evaluating index contractions. -/
+structure TEnv (M : Type*) [AddCommGroup M] [Module ℚ M] where
   lookup : String → List Index → M
+  mul : M → M → M
+  mul_add_left : ∀ (a b c : M), mul (a + b) c = mul a c + mul b c
+  mul_add_right : ∀ (a b c : M), mul a (b + c) = mul a b + mul a c
+  smul_mul_left : ∀ (r : ℚ) (a b : M), mul (r • a) b = r • mul a b
+  smul_mul_right : ∀ (r : ℚ) (a b : M), mul a (r • b) = r • mul a b
+  mul_zero_left : ∀ (a : M), mul 0 a = 0
+  mul_zero_right : ∀ (a : M), mul a 0 = 0
+  contractAt : Nat → Nat → M → M
+  contractAt_add : ∀ (i j : Nat) (a b : M),
+    contractAt i j (a + b) = contractAt i j a + contractAt i j b
+  contractAt_smul : ∀ (i j : Nat) (r : ℚ) (a : M),
+    contractAt i j (r • a) = r • contractAt i j a
+  contractAt_zero : ∀ (i j : Nat), contractAt i j 0 = 0
   isAntisym : String → Nat → Nat → Prop
   isSym : String → Nat → Nat → Prop
   isBianchi : String → Nat → Nat → Nat → Prop
@@ -108,3 +125,5 @@ noncomputable def TExpr.eval {M : Type*} [AddCommGroup M] [Module ℚ M]
   | .tensor name idxs => env.lookup name idxs
   | .smul n d e => ratCoeff n d • e.eval env
   | .sum a b => a.eval env + b.eval env
+  | .prod a b => env.mul (a.eval env) (b.eval env)
+  | .contract i j e => env.contractAt i j (e.eval env)

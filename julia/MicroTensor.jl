@@ -9,10 +9,12 @@ module MicroTensor
 using JSON
 
 export Index, TExpr, Te, up, down
-export te_zero, te_scalar, te_tensor, te_smul, te_sum
+export te_zero, te_scalar, te_tensor, te_smul, te_sum, te_prod, te_contract
+export TeProd, TeContract
 export Symmetry, Antisym, Sym, BianchiSym, Registry
 export simplify_traced, canonicalize_traced, to_json, emit_trace
 export perm_to_transpositions, riemann_symmetries
+export all_indices, dummy_pairs, free_indices
 
 # ─────────────────────────────────────────────────────────────
 # IR types (must match shared/ir.md exactly)
@@ -35,6 +37,8 @@ struct TeScalar <: TExpr; value::Rational{Int}; end
 struct TeTensor <: TExpr; name::Symbol; indices::Vector{Index}; end
 struct TeSMul <: TExpr; coeff::Rational{Int}; expr::TExpr; end
 struct TeSum <: TExpr; left::TExpr; right::TExpr; end
+struct TeProd <: TExpr; left::TExpr; right::TExpr; end
+struct TeContract <: TExpr; slot1::Int; slot2::Int; expr::TExpr; end
 
 # Smart constructors ──────────────────────────────────────────
 
@@ -56,6 +60,17 @@ function te_sum(a::TExpr, b::TExpr)
     TeSum(a, b)
 end
 
+function te_prod(a::TExpr, b::TExpr)
+    a isa TeZero && return te_zero()
+    b isa TeZero && return te_zero()
+    TeProd(a, b)
+end
+
+function te_contract(s1::Int, s2::Int, e::TExpr)
+    e isa TeZero && return te_zero()
+    TeContract(s1, s2, e)
+end
+
 # Equality ────────────────────────────────────────────────────
 
 Base.:(==)(a::Index, b::Index) = a.name == b.name && a.position == b.position
@@ -64,6 +79,8 @@ Base.:(==)(a::TeScalar, b::TeScalar) = a.value == b.value
 Base.:(==)(a::TeTensor, b::TeTensor) = a.name == b.name && a.indices == b.indices
 Base.:(==)(a::TeSMul, b::TeSMul) = a.coeff == b.coeff && a.expr == b.expr
 Base.:(==)(a::TeSum, b::TeSum) = a.left == b.left && a.right == b.right
+Base.:(==)(a::TeProd, b::TeProd) = a.left == b.left && a.right == b.right
+Base.:(==)(a::TeContract, b::TeContract) = a.slot1 == b.slot1 && a.slot2 == b.slot2 && a.expr == b.expr
 Base.:(==)(::TExpr, ::TExpr) = false
 
 # Display ─────────────────────────────────────────────────────
@@ -88,6 +105,12 @@ function Base.show(io::IO, e::TeSMul)
 end
 function Base.show(io::IO, e::TeSum)
     print(io, "(", e.left, " + ", e.right, ")")
+end
+function Base.show(io::IO, e::TeProd)
+    print(io, "(", e.left, " ⊗ ", e.right, ")")
+end
+function Base.show(io::IO, e::TeContract)
+    print(io, "Tr[", e.slot1, ",", e.slot2, "](", e.expr, ")")
 end
 
 # ─────────────────────────────────────────────────────────────
@@ -202,6 +225,30 @@ struct BianchiCyclic <: ProofStep
     path::Vector{Int}
 end
 
+struct ProdSmulLeft <: ProofStep
+    path::Vector{Int}
+end
+
+struct ProdSmulRight <: ProofStep
+    path::Vector{Int}
+end
+
+struct ProdSumLeft <: ProofStep
+    path::Vector{Int}
+end
+
+struct ProdSumRight <: ProofStep
+    path::Vector{Int}
+end
+
+struct ProdZeroLeft <: ProofStep
+    path::Vector{Int}
+end
+
+struct ProdZeroRight <: ProofStep
+    path::Vector{Int}
+end
+
 struct ProofTrace
     registry::Registry
     expr::TExpr         # original expression
@@ -217,10 +264,13 @@ end
 function subtree(e::TExpr, path::Vector{Int})
     isempty(path) && return e
     p, rest = path[1], path[2:end]
-    if e isa TeSum
+    if e isa TeSum || e isa TeProd
         subtree(p == 0 ? e.left : e.right, rest)
     elseif e isa TeSMul
         p == 0 || error("TeSMul only has child 0")
+        subtree(e.expr, rest)
+    elseif e isa TeContract
+        p == 0 || error("TeContract only has child 0")
         subtree(e.expr, rest)
     else
         error("Cannot descend into $(typeof(e))")
@@ -237,8 +287,16 @@ function replace_at(e::TExpr, path::Vector{Int}, new::TExpr)
         else
             TeSum(e.left, replace_at(e.right, rest, new))
         end
+    elseif e isa TeProd
+        if p == 0
+            TeProd(replace_at(e.left, rest, new), e.right)
+        else
+            TeProd(e.left, replace_at(e.right, rest, new))
+        end
     elseif e isa TeSMul
         TeSMul(e.coeff, replace_at(e.expr, rest, new))
+    elseif e isa TeContract
+        TeContract(e.slot1, e.slot2, replace_at(e.expr, rest, new))
     else
         error("Cannot descend into $(typeof(e)) at path $path")
     end
@@ -308,6 +366,87 @@ function cyclic_perm3(indices::Vector{Index}, s1::Int, s2::Int, s3::Int)
     result[s2] = indices[s1]
     result[s3] = indices[s2]
     return result
+end
+
+# ─────────────────────────────────────────────────────────────
+# Index analysis
+# ─────────────────────────────────────────────────────────────
+
+"""Collect all indices from an expression (flat list, may contain duplicates)."""
+function all_indices(e::TeTensor)::Vector{Index}
+    copy(e.indices)
+end
+function all_indices(e::TeSMul)::Vector{Index}
+    all_indices(e.expr)
+end
+function all_indices(e::TeSum)::Vector{Index}
+    vcat(all_indices(e.left), all_indices(e.right))
+end
+function all_indices(e::TeProd)::Vector{Index}
+    vcat(all_indices(e.left), all_indices(e.right))
+end
+function all_indices(e::TeContract)::Vector{Index}
+    all_indices(e.expr)
+end
+function all_indices(::TeZero)::Vector{Index}
+    Index[]
+end
+function all_indices(::TeScalar)::Vector{Index}
+    Index[]
+end
+
+"""Find dummy index pairs: indices appearing with both Up and Down positions."""
+function dummy_pairs(e::TExpr)
+    idxs = all_indices(e)
+    names = unique(idx.name for idx in idxs)
+    pairs = Tuple{Symbol, Index, Index}[]
+    for n in names
+        ups = filter(i -> i.name == n && i.position == Up, idxs)
+        downs = filter(i -> i.name == n && i.position == Down, idxs)
+        if !isempty(ups) && !isempty(downs)
+            push!(pairs, (n, ups[1], downs[1]))
+        end
+    end
+    pairs
+end
+
+"""Free indices: those appearing exactly once (not contracted)."""
+function free_indices(e::TExpr)
+    idxs = all_indices(e)
+    dummies = Set(p[1] for p in dummy_pairs(e))
+    filter(i -> !(i.name in dummies), idxs)
+end
+
+# ─────────────────────────────────────────────────────────────
+# Product rule application
+# ─────────────────────────────────────────────────────────────
+
+"""ProdSmulLeft: Prod(SMul(c, a), b) → SMul(c, Prod(a, b))."""
+function apply_prod_smul_left(e::TExpr)
+    e isa TeProd || error("ProdSmulLeft requires a Prod")
+    e.left isa TeSMul || error("ProdSmulLeft: left child is not SMul")
+    TeSMul(e.left.coeff, TeProd(e.left.expr, e.right))
+end
+
+"""ProdSmulRight: Prod(a, SMul(c, b)) → SMul(c, Prod(a, b))."""
+function apply_prod_smul_right(e::TExpr)
+    e isa TeProd || error("ProdSmulRight requires a Prod")
+    e.right isa TeSMul || error("ProdSmulRight: right child is not SMul")
+    TeSMul(e.right.coeff, TeProd(e.left, e.right.expr))
+end
+
+"""ProdSumLeft: Prod(Sum(a, b), c) → Sum(Prod(a, c), Prod(b, c))."""
+function apply_prod_sum_left(e::TExpr)
+    e isa TeProd || error("ProdSumLeft requires a Prod")
+    e.left isa TeSum || error("ProdSumLeft: left child is not Sum")
+    TeSum(TeProd(e.left.left, e.right), TeProd(e.left.right, e.right))
+end
+
+"""ProdSumRight: Prod(a, Sum(b, c)) → Sum(Prod(a, b), Prod(a, c))."""
+function apply_prod_sum_right(e::TExpr)
+    e isa TeProd || error("ProdSumRight requires a Prod")
+    e.right isa TeSum || error("ProdSumRight: right child is not Sum")
+    TeSum(TeProd(e.left, e.right.left), TeProd(e.left, e.right.right))
 end
 
 # ─────────────────────────────────────────────────────────────
@@ -493,6 +632,14 @@ end
 function expr_to_dict(e::TeSum)
     Dict("type" => "sum", "left" => expr_to_dict(e.left), "right" => expr_to_dict(e.right))
 end
+function expr_to_dict(e::TeProd)
+    Dict("type" => "prod", "left" => expr_to_dict(e.left), "right" => expr_to_dict(e.right))
+end
+function expr_to_dict(e::TeContract)
+    # Convert 1-indexed Julia slots to 0-indexed for JSON/Lean
+    Dict("type" => "contract", "slot1" => e.slot1 - 1, "slot2" => e.slot2 - 1,
+         "expr" => expr_to_dict(e.expr))
+end
 
 function step_to_dict(s::SwapSlots)
     # Convert 1-indexed Julia slots to 0-indexed for JSON/Lean
@@ -514,6 +661,12 @@ function step_to_dict(s::BianchiCyclic)
          "slot1" => s.slot1 - 1, "slot2" => s.slot2 - 1, "slot3" => s.slot3 - 1,
          "path" => s.path)
 end
+step_to_dict(s::ProdSmulLeft)  = Dict("rule" => "prod_smul_left", "path" => s.path)
+step_to_dict(s::ProdSmulRight) = Dict("rule" => "prod_smul_right", "path" => s.path)
+step_to_dict(s::ProdSumLeft)   = Dict("rule" => "prod_sum_left", "path" => s.path)
+step_to_dict(s::ProdSumRight)  = Dict("rule" => "prod_sum_right", "path" => s.path)
+step_to_dict(s::ProdZeroLeft)  = Dict("rule" => "prod_zero_left", "path" => s.path)
+step_to_dict(s::ProdZeroRight) = Dict("rule" => "prod_zero_right", "path" => s.path)
 
 function sym_to_dict(s::Antisym)
     # Convert 1-indexed Julia slots to 0-indexed for JSON/Lean
