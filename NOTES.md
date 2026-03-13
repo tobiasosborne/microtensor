@@ -113,6 +113,27 @@ The 7 axioms in Rules.lean proved R_{abcd} + R_{abdc} = 0 (slots 2,3) AND R_{abc
 
 This strongly suggests the axiom set is right for all pairwise slot-symmetry identities. The `smul_smul` axiom (for nested scalar multiples) wasn't needed for these two cases but will be needed when swapping inside an already-scaled tensor.
 
+## Learned: Lean `rw` rewrites ALL occurrences (2026-03-13)
+
+`rw [rule]` in Lean 4 replaces every occurrence of the matched pattern simultaneously, not just the first. This broke the proof when `tensor_as_smul` was applied after `antisym_swap`:
+
+After swap: `sum (tensor R [a,b,c,d]) (smul (-1) 1 (tensor R [a,b,c,d]))`
+After `rw [tensor_as_smul]`: `sum (smul 1 1 (tensor R [a,b,c,d])) (smul (-1) 1 (smul 1 1 (tensor R [a,b,c,d])))`
+
+The inner tensor inside `smul (-1) 1 (...)` also got wrapped, creating a nested `smul` that `collect_smul` can't match.
+
+**Fix:** Apply `tensor_as_smul` BEFORE the swap step. At that point the index lists differ (`[a,b,c,d]` vs `[a,b,d,c]`) so `rw` only matches the left summand.
+
+**Also:** `omega` can't prove `2 < [a,b,c,d].length` because it can't unfold `List.length`. Use `by decide` instead — it evaluates the concrete computation.
+
+**Also:** `rw [smul_zero]` can't match `smul (1*1 + -1*1) (1*1) e` because the pattern `smul 0 d e` requires literal `0`, and `1*1 + -1*1` isn't reduced by the rewriter. Use `exact smul_zero (1*1) e` instead — the kernel reduces the arithmetic during type checking.
+
+**Lesson for Theoria:** The replayer must be aware of Lean's rewrite semantics. Step ordering matters. Using `exact` with partially-evaluated terms is more robust than `rw` for the final step.
+
+## Learned: `@[default_target]` only builds marked targets (2026-03-13)
+
+`lake build` only builds targets marked `@[default_target]`. The original lakefile only marked `MicroTensor`, so Example.lean, Generated.lean etc. were silently never typechecked. All `lean_lib` entries need the attribute.
+
 ## Status: MVP complete (2026-03-13)
 
 All PRD success criteria met:
