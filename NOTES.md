@@ -144,12 +144,50 @@ All PRD success criteria met:
 5. ✅ Second identity works with zero axiom changes
 6. ✅ NOTES.md has findings (this section)
 
+## Explored: `lean-term` branch — term-mode proofs (2026-03-13)
+
+**Result: works, straightforward for this pattern.**
+
+The term-mode proof uses `Eq.trans` chains and `congrArg` for targeted rewrites:
+- `congrArg (sum · rhs) proof` rewrites the left argument of sum
+- `congrArg (sum lhs) proof` rewrites the right argument
+- `h1.trans (h2.trans (h3.trans h4))` chains the steps
+
+**Advantages over tactic mode:**
+- No `rw` surprises: `congrArg` targets exactly one position, no risk of rewriting too many occurrences
+- No need for `conv` workarounds
+- The replayer has explicit control over which subterm to rewrite
+
+**Disadvantages:**
+- More verbose (~15 lines vs ~10 for tactic)
+- Must spell out intermediate types (the replayer must track the expression state, which it already does)
+- Needs a helper lemma for the index swap (`idx_swap_23`) because `▸` (subst) works differently in term mode
+
+**Verdict:** Term mode is the better choice for generated proofs. The verbosity doesn't matter (it's auto-generated), and the explicit control avoids the `rw` pitfalls that required the tensor_as_smul reordering hack.
+
+## Explored: `lean-decide` branch — canonicalizer (2026-03-13)
+
+**Result: works for computational verification, but proves a weaker statement.**
+
+Built a `canon : TExpr → Registry → TExpr` function in Lean that normalizes expressions (find differing slots, check registry, apply symmetry, collect coefficients, eliminate zeros). Both identities proved with one-line `by native_decide`.
+
+**Key findings:**
+- The canonicalizer is ~50 lines of Lean. It's a direct port of the Julia simplifier logic.
+- `native_decide` needs `DecidableEq` on `TExpr` and `Symmetry` (derived easily).
+- `List.enum` doesn't exist in v4.27.0; had to write recursive `diffSlots` manually.
+- The proofs are one line each, no trace needed.
+
+**The gap:** This proves `canon(expr, reg) = zero` (a computational fact about the `canon` function), NOT `expr = zero` (the algebraic identity under the axioms). To bridge this gap, we'd need to prove `canon` correct: that each step of canonicalization corresponds to a valid axiom application. This is essentially proving the canonicalizer is a model of the equational theory — a serious project.
+
+**When to use which approach:**
+- **Trace replay (master):** Proves `expr = zero` directly. Each step is justified by an axiom. The proof is in the language of the theory.
+- **Canonicalizer (lean-decide):** Proves the computation produces zero. Faster to check, no trace overhead, but the proof doesn't reference the axioms at all.
+
+For the prototype, the trace replay approach is correct. The canonicalizer is interesting for exploration but doesn't replace it.
+
 ## Next concrete steps
 
-1. **Explore `lean-term` branch** — generate proof terms instead of tactic proofs. Should be faster to check.
-
-2. **Explore `lean-decide` branch** — build a canonicalizer in Lean, prove it correct, then every identity is `by native_decide`. Eliminates the trace entirely.
-
-3. **Fix `schema.json`** — still says `"minimum": 1` for slots but we use 0-indexed now.
-
-4. **Try a 3-term identity** — e.g., the first Bianchi identity R_{a[bcd]} = 0. This requires the simplifier to handle more than two-term sums and will stress-test the trace format.
+1. ✅ ~~Fix `schema.json`~~ — done (0-indexed)
+2. **Merge `lean-term` approach** into the replayer — generate term-mode proofs by default
+3. **Try a 3-term identity** — e.g., the first Bianchi identity R_{a[bcd]} = 0
+4. **Merge `lean-decide` DecidableEq** additions into master (useful regardless)
